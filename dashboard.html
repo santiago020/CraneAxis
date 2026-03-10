@@ -404,8 +404,8 @@ client.on("message", (topic, message) => {
   document.getElementById("live-main").textContent = val.toFixed(2) + " mm";
   document.getElementById("live-err").textContent  = err.toFixed(2) + " mm";
 
-  // Gauge (0–15 mm)
-  const pct = Math.max(0, Math.min(100, (val / 15) * 100));
+  // Gauge (0–20 mm)
+  const pct = Math.max(0, Math.min(100, (val / 20) * 100));
   document.getElementById("gaugeFill").style.width = pct + "%";
   document.getElementById("gaugeVal").textContent  = val.toFixed(2) + " mm";
 
@@ -455,7 +455,7 @@ function drawPlot(canvas, buf, color, yMin, yMax) {
   // Y axis labels (mm scale)
   ctx.fillStyle = "rgba(61,104,128,0.8)";
   ctx.font = "9px 'Share Tech Mono'";
-  [0, 5, 10, 15].forEach(v => {
+  [0, 5, 10, 15, 20].forEach(v => {
     const y = H - ((v - yMin) / (yMax - yMin)) * H;
     ctx.fillText(v + "mm", 4, y - 2);
     ctx.strokeStyle = "rgba(0,212,255,0.05)"; ctx.lineWidth = 1;
@@ -496,9 +496,9 @@ function drawPlot(canvas, buf, color, yMin, yMax) {
 }
 
 function renderAll() {
-  drawPlot(canvases.main, buffers.main, "#00d4ff",  0,  15);
-  drawPlot(canvases.err,  buffers.err,  "#00ffb3", -15, 15);
-  drawPlot(canvases.ctrl, buffers.ctrl, "#ffaa00",  0,  15);
+  drawPlot(canvases.main, buffers.main, "#00d4ff",  0,  20);
+  drawPlot(canvases.err,  buffers.err,  "#00ffb3", -20, 20);
+  drawPlot(canvases.ctrl, buffers.ctrl, "#ffaa00",  0,  20);
   requestAnimationFrame(renderAll);
 }
 requestAnimationFrame(renderAll);
