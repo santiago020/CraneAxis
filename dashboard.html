@@ -289,40 +289,40 @@
 
     <div class="plot-panel main">
       <div class="panel-header">
-        <div class="panel-title">Posición del Gancho — Sensor ESP32 (MQTT)</div>
+        <div class="panel-title">Posición x y Velocidad xd — ESP32 (MQTT)</div>
         <div class="panel-tag" id="tag-main">LIVE</div>
       </div>
       <div class="canvas-area">
         <canvas id="canvas-main"></canvas>
         <div class="live-badge" id="live-main">-- mm</div>
         <div class="axis-x">t (s) →</div>
-        <div class="axis-y">pos (mm) ↑</div>
+        <div class="axis-y">x / xd ↑</div>
       </div>
     </div>
 
     <div class="plot-panel">
       <div class="panel-header">
-        <div class="panel-title">Error de Posición e(t)</div>
+        <div class="panel-title">Error de Posición ek(t)</div>
         <div class="panel-tag">ERR</div>
       </div>
       <div class="canvas-area">
         <canvas id="canvas-err"></canvas>
         <div class="live-badge" id="live-err">-- mm</div>
         <div class="axis-x">t (s) →</div>
-        <div class="axis-y">e(t) ↑</div>
+        <div class="axis-y">ek ↑</div>
       </div>
     </div>
 
     <div class="plot-panel">
       <div class="panel-header">
-        <div class="panel-title">Setpoint Enviado u(t)</div>
+        <div class="panel-title">Señal de Control ux(t)</div>
         <div class="panel-tag">CMD</div>
       </div>
       <div class="canvas-area">
         <canvas id="canvas-ctrl"></canvas>
         <div class="live-badge" id="live-ctrl">-- mm</div>
         <div class="axis-x">t (s) →</div>
-        <div class="axis-y">ref (mm) ↑</div>
+        <div class="axis-y">ux ↑</div>
       </div>
     </div>
 
@@ -391,23 +391,34 @@ let t0 = Date.now();
 
 client.on("message", (topic, message) => {
   if (topic !== topicSub) return;
-  const val = parseFloat(message.toString());
-  if (isNaN(val)) return;
+
+  // Parsear 4 valores: "dato1,dato2,error,dato4"
+  const parts = message.toString().split(",");
+  if (parts.length < 4) return;
+
+  const x  = parseFloat(parts[0]);  // gráfica 1 — línea 1
+  const xd = parseFloat(parts[1]);  // gráfica 1 — línea 2
+  const ek = parseFloat(parts[2]);  // gráfica 2 — error
+  const ux = parseFloat(parts[3]);  // gráfica 3
+
+  if ([x, xd, ek, ux].some(isNaN)) return;
 
   sampleCount++;
-  const err = currentRef - val;
 
-  pushData(buffers.main, val);
-  pushData(buffers.err,  err);
+  pushData(buffers.main1, x);
+  pushData(buffers.main2, xd);
+  pushData(buffers.err,   ek);
+  pushData(buffers.ctrl,  ux);
 
   // Badges
-  document.getElementById("live-main").textContent = val.toFixed(2) + " mm";
-  document.getElementById("live-err").textContent  = err.toFixed(2) + " mm";
+  document.getElementById("live-main").textContent = `x:${x.toFixed(2)}  xd:${xd.toFixed(2)}`;
+  document.getElementById("live-err").textContent  = ek.toFixed(2) + " mm";
+  document.getElementById("live-ctrl").textContent = ux.toFixed(2) + " mm";
 
-  // Gauge (0–20 mm)
-  const pct = Math.max(0, Math.min(100, (val / 20) * 100));
+  // Gauge usa x
+  const pct = Math.max(0, Math.min(100, (x / 20) * 100));
   document.getElementById("gaugeFill").style.width = pct + "%";
-  document.getElementById("gaugeVal").textContent  = val.toFixed(2) + " mm";
+  document.getElementById("gaugeVal").textContent  = x.toFixed(2) + " mm";
 
   document.getElementById("p-samples").textContent = sampleCount;
 });
@@ -433,14 +444,38 @@ window.addEventListener("resize", () => {
 
 // ── Buffers ────────────────────────────────────────────
 const MAX_PTS = 300;
-const buffers = { main:[], err:[], ctrl:[] };
+const buffers = { main1:[], main2:[], err:[], ctrl:[] };
 function pushData(buf, v) {
   buf.push({ t:(Date.now()-t0)/1000, v });
   if (buf.length > MAX_PTS) buf.shift();
 }
 
-// ── Draw ───────────────────────────────────────────────
-function drawPlot(canvas, buf, color, yMin, yMax) {
+// ── Draw single line ───────────────────────────────────
+function drawLine(ctx, buf, color, toY, W, glow) {
+  if (buf.length < 2) return;
+  ctx.shadowColor = color;
+  ctx.shadowBlur  = glow ? 10 : 0;
+  ctx.strokeStyle = glow ? color + "55" : color;
+  ctx.lineWidth   = glow ? 3 : 1.8;
+  ctx.beginPath();
+  buf.forEach((pt, i) => {
+    const x = (i / (buf.length-1)) * W;
+    i === 0 ? ctx.moveTo(x, toY(pt.v)) : ctx.lineTo(x, toY(pt.v));
+  });
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  if (!glow) {
+    // End dot
+    const last = buf[buf.length-1];
+    ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 14;
+    ctx.beginPath(); ctx.arc(W-2, toY(last.v), 4, 0, Math.PI*2); ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+}
+
+// ── Draw plot (1 or 2 lines) ───────────────────────────
+function drawPlot(canvas, bufs, colors, yMin, yMax) {
   const ctx = canvas.getContext("2d");
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
@@ -452,10 +487,11 @@ function drawPlot(canvas, buf, color, yMin, yMax) {
     ctx.beginPath(); ctx.moveTo(0,i*H/10); ctx.lineTo(W,i*H/10); ctx.stroke();
   }
 
-  // Y axis labels (mm scale)
+  // Y axis labels
   ctx.fillStyle = "rgba(61,104,128,0.8)";
   ctx.font = "9px 'Share Tech Mono'";
   [0, 5, 10, 15, 20].forEach(v => {
+    if (v < yMin || v > yMax) return;
     const y = H - ((v - yMin) / (yMax - yMin)) * H;
     ctx.fillText(v + "mm", 4, y - 2);
     ctx.strokeStyle = "rgba(0,212,255,0.05)"; ctx.lineWidth = 1;
@@ -464,41 +500,40 @@ function drawPlot(canvas, buf, color, yMin, yMax) {
     ctx.setLineDash([]);
   });
 
-  if (buf.length < 2) return;
+  // Zero line for error chart
+  if (yMin < 0) {
+    const y0 = H - ((0 - yMin) / (yMax - yMin)) * H;
+    ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(W, y0); ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
   const range = yMax - yMin;
   const toY = v => H - ((v - yMin) / range) * H;
 
-  // Glow
-  ctx.shadowColor = color; ctx.shadowBlur = 10;
-  ctx.strokeStyle = color + "55"; ctx.lineWidth = 3;
-  ctx.beginPath();
-  buf.forEach((pt, i) => {
-    const x = (i / (buf.length-1)) * W;
-    i === 0 ? ctx.moveTo(x, toY(pt.v)) : ctx.lineTo(x, toY(pt.v));
+  // Draw each buffer
+  bufs.forEach((buf, idx) => {
+    drawLine(ctx, buf, colors[idx], toY, W, true);   // glow pass
+    drawLine(ctx, buf, colors[idx], toY, W, false);  // sharp pass
   });
-  ctx.stroke();
 
-  // Sharp line
-  ctx.shadowBlur = 0; ctx.strokeStyle = color; ctx.lineWidth = 1.8;
-  ctx.beginPath();
-  buf.forEach((pt, i) => {
-    const x = (i / (buf.length-1)) * W;
-    i === 0 ? ctx.moveTo(x, toY(pt.v)) : ctx.lineTo(x, toY(pt.v));
-  });
-  ctx.stroke();
-
-  // End dot
-  const last = buf[buf.length-1];
-  ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 14;
-  ctx.beginPath(); ctx.arc(W-2, toY(last.v), 4, 0, Math.PI*2); ctx.fill();
-  ctx.shadowBlur = 0;
+  // Legend dots top-left
+  if (bufs.length > 1) {
+    const labels = ["x", "xd"];
+    bufs.forEach((buf, idx) => {
+      ctx.fillStyle = colors[idx];
+      ctx.beginPath(); ctx.arc(36 + idx*52, 14, 4, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = "rgba(180,220,240,0.7)";
+      ctx.font = "9px 'Share Tech Mono'";
+      ctx.fillText(labels[idx], 44 + idx*52, 18);
+    });
+  }
 }
 
 function renderAll() {
-  drawPlot(canvases.main, buffers.main, "#00d4ff",  0,  20);
-  drawPlot(canvases.err,  buffers.err,  "#00ffb3", -20, 20);
-  drawPlot(canvases.ctrl, buffers.ctrl, "#ffaa00",  0,  20);
+  drawPlot(canvases.main, [buffers.main1, buffers.main2], ["#00d4ff", "#ffaa00"],  0,  20);
+  drawPlot(canvases.err,  [buffers.err],                  ["#00ffb3"],            -20, 20);
+  drawPlot(canvases.ctrl, [buffers.ctrl],                 ["#ff6b8a"],             0,  20);
   requestAnimationFrame(renderAll);
 }
 requestAnimationFrame(renderAll);
