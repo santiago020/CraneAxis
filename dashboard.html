@@ -178,6 +178,57 @@
     border-radius:8px; padding:8px 18px; flex-wrap:wrap;
   }
   .mqtt-topic { font-family:'Share Tech Mono',monospace; font-size:9px; color:var(--text-dim); letter-spacing:1px; line-height:2; }
+
+  /* ── TABLET ≤900px ── */
+  @media (max-width:900px) {
+    .wrapper { padding:12px 14px 18px; }
+    .brand-name { font-size:18px; letter-spacing:2px; }
+    .brand-sub { font-size:9px; }
+    .top-bar { flex-direction:column; align-items:stretch; gap:10px; }
+    .selector-bar { width:100%; justify-content:space-between; }
+    .ctrl-btn { flex:1; padding:8px 6px; font-size:11px; letter-spacing:1px; text-align:center; }
+    .setpoint-card { flex-wrap:wrap; gap:8px; }
+    .gauge-wrap { flex-direction:row; align-items:center; gap:10px; width:100%; }
+    .gauge-bar-outer { flex:1; width:auto; }
+    .plots-grid { grid-template-columns:1fr; grid-template-rows:auto; }
+    .plot-panel.main { grid-row:auto; }
+    .plot-panel.main .canvas-area { height:260px; }
+    .plot-panel:not(.main) .canvas-area { height:200px; }
+  }
+
+  /* ── MÓVIL ≤540px ── */
+  @media (max-width:540px) {
+    .wrapper { padding:10px 10px 16px; }
+    header { gap:8px; flex-wrap:wrap; }
+    .crane-icon { display:none; }
+    .brand-name { font-size:16px; letter-spacing:1px; }
+    .brand-sub { display:none; }
+    .conn-pill { font-size:10px; padding:4px 10px; border-radius:14px; }
+    /* Selector 2x2 */
+    .selector-bar { display:grid; grid-template-columns:1fr 1fr; width:100%; }
+    .ctrl-btn { padding:10px 4px; font-size:11px; letter-spacing:0.5px; }
+    /* Setpoint en columna */
+    .setpoint-card { flex-direction:column; align-items:flex-start; gap:10px; padding:12px; }
+    .setpoint-card label { font-size:9px; }
+    .sp-input-wrap { width:100%; }
+    .sp-input { width:100%; font-size:22px; padding:10px; }
+    .sp-unit { font-size:14px; }
+    .send-btn { width:100%; padding:14px; font-size:15px; letter-spacing:3px; border-radius:8px; }
+    /* Gauge */
+    .gauge-wrap { flex-direction:row; width:100%; align-items:center; gap:10px; padding:10px 14px; }
+    .gauge-bar-outer { flex:1; width:auto; height:12px; }
+    .gauge-val { font-size:15px; white-space:nowrap; }
+    /* Gráficas */
+    .plot-panel.main .canvas-area { height:240px; }
+    .plot-panel:not(.main) .canvas-area { height:180px; }
+    .panel-title { font-size:9px; letter-spacing:1px; }
+    .panel-tag { font-size:9px; padding:1px 6px; }
+    .live-badge { font-size:11px; padding:2px 8px; }
+    /* Footer */
+    .footer-strip { flex-direction:column; align-items:flex-start; gap:6px; padding:10px 14px; }
+    .sample-count { margin-left:0; }
+    .sample-count b { display:inline; font-size:14px; margin-left:6px; }
+  }
   .mqtt-topic span { color:var(--accent3); }
   .sample-count { margin-left:auto; font-family:'Share Tech Mono',monospace; font-size:9px; color:var(--text-dim); text-align:right; }
   .sample-count b { color:var(--accent); font-size:16px; display:block; }
