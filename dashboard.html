@@ -1,144 +1,466 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <title>Péndulo Invertido control</title>
-  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <style>
-    body {
-      background: radial-gradient(circle, rgba(191,65,80,1) 0%, rgba(0,0,0,1) 100%);
-      color: #e6edf3; font-family: 'Segoe UI', sans-serif; text-align: center;
-      padding-top: 190px; margin: 0;
-    }
-    h1 { color: #000000; margin: 6px 0 10px; }
-    .status { margin-bottom: 8px; font-size: 15px; }
-    canvas { background:#161b22; border-radius:12px; box-shadow:0 0 10px rgba(0,0,0,.5); margin-top:16px; }
-    #lastValue { font-size:22px; font-weight:bold; margin-top:10px; color:#000000; }
-    .logo-fixed { position:absolute; top:10px; left:10px; width:120px; z-index:10; }
-    .controls-fixed {
-      position:absolute; top:20px; left:150px; right:10px; z-index:11;
-      display:flex; gap:10px; align-items:center; justify-content:center; flex-wrap:wrap;
-    }
-    .control-card {
-      background: rgba(22,27,34,.85); border:1px solid #30363d; border-radius:12px;
-      padding:10px 12px; display:inline-flex; gap:10px; align-items:center;
-      box-shadow:0 0 8px rgba(0,0,0,.3);
-    }
-    .control-card label { font-size:14px; color:#c9d1d9; }
-    .control-card input[type="number"] {
-      width:100px; padding:8px 10px; border-radius:10px; border:1px solid #3b3f44;
-      background:#0d1117; color:#e6edf3; font-size:16px; outline:none; text-align:center;
-    }
-    .btn {
-      padding:8px 14px; border-radius:10px; border:1px solid #30363d;
-      background:#238636; color:white; font-weight:600; cursor:pointer;
-    }
-    .btn:disabled { background:#2d333b; cursor:not-allowed; }
-    .btn.secondary { background:#0969da; }
-    .sent-badge { font-size:13px; color:#8b949e; }
-    .range-note { font-size:13px; color:#c9d1d9; margin-left:4px; font-style:italic; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CraneAxis — Sistema de Control Grúa Pluma</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #080c10;
+    --panel: #0b1520;
+    --panel-border: #152a40;
+    --accent: #00d4ff;
+    --accent2: #00ffb3;
+    --accent3: #ffaa00;
+    --text: #b8dff5;
+    --text-dim: #3d6880;
+    --grid: rgba(0,212,255,0.05);
+    --active: #00253a;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); font-family:'Rajdhani',sans-serif; color:var(--text); min-height:100vh; overflow-x:hidden; }
+  body::before {
+    content:''; position:fixed; inset:0;
+    background-image: linear-gradient(var(--grid) 1px,transparent 1px), linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+    background-size:40px 40px; pointer-events:none; z-index:0;
+  }
+  /* subtle crane silhouette top-right */
+  body::after {
+    content:''; position:fixed; top:0; right:0;
+    width:320px; height:320px;
+    background: radial-gradient(ellipse at top right, rgba(0,212,255,0.04) 0%, transparent 70%);
+    pointer-events:none; z-index:0;
+  }
+
+  .wrapper { position:relative; z-index:1; padding:16px 22px 22px; max-width:1440px; margin:0 auto; }
+
+  /* ── HEADER ── */
+  header { display:flex; align-items:center; gap:16px; margin-bottom:16px; }
+
+  .brand { display:flex; flex-direction:column; gap:3px; }
+  .brand-name {
+    font-size:22px; font-weight:700; letter-spacing:4px; text-transform:uppercase;
+    color:var(--accent); text-shadow:0 0 20px rgba(0,212,255,0.5);
+  }
+  .brand-name span { color:var(--accent3); }
+  .brand-sub { font-family:'Share Tech Mono',monospace; font-size:10px; color:var(--text-dim); letter-spacing:2px; }
+
+  /* crane icon made with CSS */
+  .crane-icon {
+    width:42px; height:42px; position:relative; flex-shrink:0;
+  }
+  .crane-icon::before {
+    content:'🏗';
+    font-size:30px;
+    filter: drop-shadow(0 0 6px rgba(0,212,255,0.6));
+  }
+
+  .conn-pill {
+    margin-left:auto; display:flex; align-items:center; gap:8px;
+    background:var(--panel); border:1px solid var(--panel-border);
+    border-radius:20px; padding:6px 16px;
+    font-family:'Share Tech Mono',monospace; font-size:11px; color:var(--text-dim); transition:all 0.3s;
+  }
+  .conn-pill.connected  { border-color:var(--accent2); color:var(--accent2); }
+  .conn-pill.error      { border-color:#ff4444;        color:#ff4444; }
+  .conn-pill.connecting { border-color:var(--accent3); color:var(--accent3); }
+  .conn-dot { width:8px; height:8px; border-radius:50%; background:currentColor; box-shadow:0 0 6px currentColor; animation:pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  /* ── TOP BAR ── */
+  .top-bar { display:flex; align-items:flex-end; gap:14px; margin-bottom:16px; flex-wrap:wrap; }
+  .selector-col { display:flex; flex-direction:column; gap:5px; }
+  .bar-label { font-family:'Share Tech Mono',monospace; font-size:9px; letter-spacing:3px; color:var(--text-dim); text-transform:uppercase; }
+
+  .selector-bar {
+    display:inline-flex; background:var(--panel);
+    border:1px solid var(--panel-border); border-radius:6px; padding:4px; gap:4px;
+  }
+  .ctrl-btn {
+    font-family:'Rajdhani',sans-serif; font-weight:700; font-size:12px; letter-spacing:2px;
+    text-transform:uppercase; padding:8px 18px; border:1px solid transparent; border-radius:4px;
+    background:transparent; color:var(--text-dim); cursor:pointer; transition:all 0.2s; white-space:nowrap;
+  }
+  .ctrl-btn:hover { color:var(--accent); border-color:rgba(0,212,255,0.3); background:rgba(0,212,255,0.05); }
+  .ctrl-btn.active {
+    background:var(--active); border-color:var(--accent); color:var(--accent);
+    box-shadow:0 0 18px rgba(0,212,255,0.25); text-shadow:0 0 10px rgba(0,212,255,0.7);
+  }
+
+  /* ── SETPOINT CARD ── */
+  .setpoint-card {
+    display:flex; align-items:center; gap:12px;
+    background:var(--panel); border:1px solid var(--panel-border);
+    border-radius:8px; padding:10px 16px;
+    box-shadow: 0 0 20px rgba(0,212,255,0.04);
+  }
+  .setpoint-card label {
+    font-family:'Share Tech Mono',monospace; font-size:10px;
+    color:var(--text-dim); letter-spacing:2px; text-transform:uppercase; white-space:nowrap;
+  }
+  .sp-input-wrap { display:flex; align-items:center; gap:6px; }
+  .sp-input {
+    width:80px; padding:7px 10px; border-radius:6px;
+    border:1px solid var(--panel-border);
+    background:#030810; color:var(--accent);
+    font-family:'Share Tech Mono',monospace; font-size:18px;
+    outline:none; text-align:center; transition:border-color 0.2s;
+  }
+  .sp-input:focus { border-color:var(--accent); box-shadow:0 0 10px rgba(0,212,255,0.3); }
+  .sp-unit {
+    font-family:'Share Tech Mono',monospace; font-size:11px;
+    color:var(--accent3); letter-spacing:1px; white-space:nowrap;
+  }
+  .range-hint { font-family:'Share Tech Mono',monospace; font-size:9px; color:var(--text-dim); letter-spacing:1px; white-space:nowrap; }
+
+  .send-btn {
+    font-family:'Rajdhani',sans-serif; font-weight:700; font-size:13px; letter-spacing:2px;
+    text-transform:uppercase; padding:9px 20px; border-radius:6px; cursor:pointer;
+    transition:all 0.2s; border:1px solid var(--accent);
+    background:rgba(0,212,255,0.1); color:var(--accent);
+  }
+  .send-btn:hover:not(:disabled) { background:rgba(0,212,255,0.22); box-shadow:0 0 18px rgba(0,212,255,0.4); }
+  .send-btn:disabled { opacity:0.35; cursor:not-allowed; }
+
+  .last-sent { font-family:'Share Tech Mono',monospace; font-size:10px; color:var(--text-dim); letter-spacing:1px; white-space:nowrap; }
+
+  /* ── GAUGE inline ── */
+  .gauge-wrap {
+    display:flex; flex-direction:column; align-items:center; gap:3px;
+    background:var(--panel); border:1px solid var(--panel-border);
+    border-radius:8px; padding:8px 14px;
+  }
+  .gauge-label { font-family:'Share Tech Mono',monospace; font-size:9px; color:var(--text-dim); letter-spacing:2px; text-transform:uppercase; }
+  .gauge-bar-outer {
+    width:140px; height:10px; background:#0a1820;
+    border-radius:5px; border:1px solid var(--panel-border); overflow:hidden;
+  }
+  .gauge-bar-inner {
+    height:100%; width:0%; border-radius:5px;
+    background: linear-gradient(90deg, var(--accent2), var(--accent));
+    box-shadow: 0 0 8px var(--accent);
+    transition: width 0.3s ease;
+  }
+  .gauge-val { font-family:'Share Tech Mono',monospace; font-size:13px; color:var(--accent); text-shadow:0 0 8px rgba(0,212,255,0.5); }
+
+  /* ── PLOTS ── */
+  .plots-grid { display:grid; grid-template-columns:1fr 1fr; grid-template-rows:auto auto; gap:14px; }
+  .plot-panel { background:var(--panel); border:1px solid var(--panel-border); border-radius:8px; overflow:hidden; transition:border-color 0.3s; }
+  .plot-panel:hover { border-color:rgba(0,212,255,0.4); }
+  .plot-panel.main { grid-row:1/3; }
+  .panel-header { display:flex; align-items:center; gap:10px; padding:9px 14px; border-bottom:1px solid var(--panel-border); background:rgba(0,212,255,0.025); }
+  .panel-title { font-family:'Share Tech Mono',monospace; font-size:10px; letter-spacing:2px; color:var(--text-dim); text-transform:uppercase; }
+  .panel-tag { margin-left:auto; font-family:'Share Tech Mono',monospace; font-size:10px; padding:2px 8px; border-radius:3px; background:rgba(0,212,255,0.08); border:1px solid rgba(0,212,255,0.2); color:var(--accent); letter-spacing:1px; }
+  .canvas-area { position:relative; overflow:hidden; }
+  .plot-panel.main .canvas-area { height:470px; }
+  .plot-panel:not(.main) .canvas-area { height:220px; }
+  canvas { display:block; width:100%; height:100%; }
+
+  .live-badge {
+    position:absolute; top:8px; right:8px;
+    background:rgba(0,255,179,0.07); border:1px solid rgba(0,255,179,0.28);
+    border-radius:4px; padding:3px 10px;
+    font-family:'Share Tech Mono',monospace; font-size:13px; color:var(--accent2);
+    text-shadow:0 0 8px var(--accent2); display:flex; align-items:center; gap:6px;
+  }
+  .live-badge::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--accent2); box-shadow:0 0 6px var(--accent2); animation:pulse 1s ease-in-out infinite; }
+  .canvas-area::after { content:''; position:absolute; inset:0; background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.06) 2px,rgba(0,0,0,0.06) 4px); pointer-events:none; }
+  .axis-x,.axis-y { position:absolute; font-family:'Share Tech Mono',monospace; font-size:9px; color:var(--text-dim); }
+  .axis-x { bottom:6px; right:10px; }
+  .axis-y { top:8px; left:8px; writing-mode:vertical-rl; transform:rotate(180deg); }
+
+  /* ── FOOTER STRIP ── */
+  .footer-strip {
+    margin-top:14px; display:flex; align-items:center; gap:20px;
+    background:var(--panel); border:1px solid var(--panel-border);
+    border-radius:8px; padding:8px 18px; flex-wrap:wrap;
+  }
+  .mqtt-topic { font-family:'Share Tech Mono',monospace; font-size:9px; color:var(--text-dim); letter-spacing:1px; line-height:2; }
+  .mqtt-topic span { color:var(--accent3); }
+  .sample-count { margin-left:auto; font-family:'Share Tech Mono',monospace; font-size:9px; color:var(--text-dim); text-align:right; }
+  .sample-count b { color:var(--accent); font-size:16px; display:block; }
+</style>
 </head>
 <body>
-  <img class="logo-fixed"
-       src="https://upload.wikimedia.org/wikipedia/commons/thumb/e/ed/Escudo_Universidad_Militar_Nueva_Granada.svg/958px-Escudo_Universidad_Militar_Nueva_Granada.svg.png"
-       alt="Logo UMNG">
+<div class="wrapper">
 
-  <div class="controls-fixed">
-    <div class="control-card">
-      <label for="refInput">Referencia (°):</label>
-      <input id="refInput" type="number" step="0.1" min="-10" max="10" placeholder="ej. 5.0" inputmode="decimal" />
-      <button id="sendBtn" class="btn" disabled>Enviar</button>
-      <button id="zeroBtn" class="btn secondary" disabled>Cero (Z)</button>
-      <span class="range-note">(Solo se aceptan valores entre −10° y 10°)</span>
-      <span id="lastSent" class="sent-badge">Último enviado: --</span>
+  <!-- HEADER -->
+  <header>
+    <div class="crane-icon"></div>
+    <div class="brand">
+      <div class="brand-name">Crane<span>Axis</span></div>
+      <div class="brand-sub">SISTEMA DE CONTROL — GRÚA PLUMA · ESP32 + MQTT</div>
+    </div>
+    <div class="conn-pill connecting" id="connPill">
+      <div class="conn-dot"></div>
+      <span id="connText">Conectando...</span>
+    </div>
+  </header>
+
+  <!-- TOP BAR -->
+  <div class="top-bar">
+
+    <div class="selector-col">
+      <div class="bar-label">// Modo de control</div>
+      <div class="selector-bar">
+        <button class="ctrl-btn active" onclick="selectCtrl(this,'PID')">PID</button>
+        <button class="ctrl-btn" onclick="selectCtrl(this,'LQR')">LQR</button>
+        <button class="ctrl-btn" onclick="selectCtrl(this,'OSC')">Oscilaciones Muertas</button>
+        <button class="ctrl-btn" onclick="selectCtrl(this,'SERVO')">Servo</button>
+      </div>
+    </div>
+
+    <!-- Setpoint input -->
+    <div class="setpoint-card">
+      <label for="spInput">Posición objetivo</label>
+      <div class="sp-input-wrap">
+        <input id="spInput" class="sp-input" type="number" step="0.1" min="0" max="15" placeholder="7.5" inputmode="decimal">
+        <div class="sp-unit">mm</div>
+      </div>
+      <div class="range-hint">0 – 15 mm</div>
+      <button id="sendBtn" class="send-btn" disabled onclick="publishSetpoint()">▶ Enviar</button>
+      <span class="last-sent" id="lastSent">Último: --</span>
+    </div>
+
+    <!-- Live gauge -->
+    <div class="gauge-wrap">
+      <div class="gauge-label">Posición actual</div>
+      <div class="gauge-bar-outer"><div class="gauge-bar-inner" id="gaugeFill"></div></div>
+      <div class="gauge-val" id="gaugeVal">-- mm</div>
+    </div>
+
+  </div>
+
+  <!-- PLOTS -->
+  <div class="plots-grid">
+
+    <div class="plot-panel main">
+      <div class="panel-header">
+        <div class="panel-title">Posición del Gancho — Sensor ESP32 (MQTT)</div>
+        <div class="panel-tag" id="tag-main">LIVE</div>
+      </div>
+      <div class="canvas-area">
+        <canvas id="canvas-main"></canvas>
+        <div class="live-badge" id="live-main">-- mm</div>
+        <div class="axis-x">t (s) →</div>
+        <div class="axis-y">pos (mm) ↑</div>
+      </div>
+    </div>
+
+    <div class="plot-panel">
+      <div class="panel-header">
+        <div class="panel-title">Error de Posición e(t)</div>
+        <div class="panel-tag">ERR</div>
+      </div>
+      <div class="canvas-area">
+        <canvas id="canvas-err"></canvas>
+        <div class="live-badge" id="live-err">-- mm</div>
+        <div class="axis-x">t (s) →</div>
+        <div class="axis-y">e(t) ↑</div>
+      </div>
+    </div>
+
+    <div class="plot-panel">
+      <div class="panel-header">
+        <div class="panel-title">Setpoint Enviado u(t)</div>
+        <div class="panel-tag">CMD</div>
+      </div>
+      <div class="canvas-area">
+        <canvas id="canvas-ctrl"></canvas>
+        <div class="live-badge" id="live-ctrl">-- mm</div>
+        <div class="axis-x">t (s) →</div>
+        <div class="axis-y">ref (mm) ↑</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- FOOTER STRIP -->
+  <div class="footer-strip">
+    <div class="mqtt-topic">
+      SUB <span>pendulo/esp32/imu</span><br>
+      PUB <span>pendulo/esp32/cmd</span> · MODE <span>pendulo/esp32/mode</span>
+    </div>
+    <div class="sample-count">
+      MUESTRAS<b id="p-samples">0</b>
     </div>
   </div>
 
-  <h1>PÉNDULO CONTROL</h1>
-  <div class="status" id="status">Conectando...</div>
-  <div id="lastValue">Último θ: -- °</div>
-  <canvas id="chart" width="600" height="300"></canvas>
+</div>
 
-  <script>
-    const broker   = "wss://broker.hivemq.com:8884/mqtt";
-    const topicSub = "pendulo/esp32/imu";
-    const topicPub = "pendulo/esp32/cmd";
-    const client   = mqtt.connect(broker);
+<script>
+// ── MQTT ──────────────────────────────────────────────
+const broker    = "wss://broker.hivemq.com:8884/mqtt";
+const topicSub  = "pendulo/esp32/imu";
+const topicPub  = "pendulo/esp32/cmd";
+const topicMode = "pendulo/esp32/mode";
+const client    = mqtt.connect(broker);
 
-    const statusEl   = document.getElementById("status");
-    const lastValEl  = document.getElementById("lastValue");
-    const refInput   = document.getElementById("refInput");
-    const sendBtn    = document.getElementById("sendBtn");
-    const zeroBtn    = document.getElementById("zeroBtn");
-    const lastSentEl = document.getElementById("lastSent");
+const connPill   = document.getElementById("connPill");
+const connText   = document.getElementById("connText");
+const sendBtn    = document.getElementById("sendBtn");
+const spInput    = document.getElementById("spInput");
+const lastSentEl = document.getElementById("lastSent");
 
-    client.on("connect", () => {
-      statusEl.textContent = "🟢 Conectado";
-      client.subscribe(topicSub);
-      sendBtn.disabled = false;
-      zeroBtn.disabled = false;
-    });
-    client.on("reconnect", () => { statusEl.textContent = "🟡 Reintentando conexión…"; sendBtn.disabled = true; zeroBtn.disabled = true; });
-    client.on("close", () => { statusEl.textContent = "🟠 Desconectado"; sendBtn.disabled = true; zeroBtn.disabled = true; });
-    client.on("error", (err) => { statusEl.textContent = "🔴 Error: " + err.message; sendBtn.disabled = true; zeroBtn.disabled = true; });
+function setConn(state, msg) {
+  connPill.className = "conn-pill " + state;
+  connText.textContent = msg;
+  sendBtn.disabled = (state !== "connected");
+}
 
-    function publishNumber() {
-      const raw = refInput.value.trim().replace(",", ".");
-      if (raw === "") return;
-      const num = parseFloat(raw);
-      if (isNaN(num)) { alert("Valor inválido."); return; }
-      const min = parseFloat(refInput.min), max = parseFloat(refInput.max);
-      const clipped = Math.max(min, Math.min(max, num));
-      client.publish(topicPub, String(clipped), { qos: 0, retain: true });
-      lastSentEl.textContent = `Último enviado: ${clipped}`;
-    }
-    function publishZero() {
-      client.publish(topicPub, "Z", { qos: 0, retain: false });
-      lastSentEl.textContent = `Último enviado: Z (cero)`;
-    }
+client.on("connect",   () => { setConn("connected",  "🟢 Conectado — HiveMQ"); client.subscribe(topicSub); });
+client.on("reconnect", () =>   setConn("connecting",  "🟡 Reintentando..."));
+client.on("close",     () =>   setConn("error",       "🔴 Desconectado"));
+client.on("error",  e  =>     setConn("error", "🔴 " + e.message));
 
-    sendBtn.addEventListener("click", publishNumber);
-    zeroBtn.addEventListener("click", publishZero);
+let currentRef = 0;
 
-    // Enter envía número; tecla Z envía cero
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") publishNumber();
-      if (e.key === "z" || e.key === "Z") publishZero();
-    });
+function publishSetpoint() {
+  const raw = spInput.value.trim().replace(",",".");
+  if (!raw) return;
+  const num = parseFloat(raw);
+  if (isNaN(num)) { alert("Valor inválido."); return; }
+  const clipped = Math.max(0, Math.min(15, num));
+  client.publish(topicPub, String(clipped), { qos:0, retain:true });
+  lastSentEl.textContent = `Último: ${clipped.toFixed(1)} mm`;
+  currentRef = clipped;
+  pushData(buffers.ctrl, clipped);
+  document.getElementById("live-ctrl").textContent = clipped.toFixed(1) + " mm";
+}
 
-    // Gráfico
-    const ctx = document.getElementById("chart").getContext("2d");
-    const data = { labels: [], datasets: [{ label: "Ángulo (°)", data: [], borderColor: "#58a6ff", borderWidth: 2, pointRadius: 0, fill: false, tension: 0.15 }] };
-    const chart = new Chart(ctx, {
-      type: "line",
-      data: data,
-      options: {
-        animation: false,
-        plugins: { legend: { labels: { color: "#e6edf3" } } },
-        scales: {
-          x: { title: { display: true, text: "Tiempo (s)", color: "#e6edf3" }, ticks: { color: "#aaa" }, grid: { color: "#30363d" } },
-          y: { title: { display: true, text: "Ángulo (°)", color: "#e6edf3" }, min: -50, max: 50, ticks: { color: "#aaa" }, grid: { color: "#30363d" } }
-        }
-      }
-    });
-    let t0 = Date.now();
-    function updateChart(value) {
-      const t = ((Date.now() - t0) / 1000).toFixed(1);
-      data.labels.push(t);
-      data.datasets[0].data.push(value);
-      if (data.labels.length > 150) { data.labels.shift(); data.datasets[0].data.shift(); }
-      chart.update("none");
-    }
-    client.on("message", (topic, message) => {
-      if (topic !== topicSub) return;
-      const val = parseFloat(message.toString());
-      if (!isNaN(val)) {
-        lastValEl.textContent = `Último θ: ${val.toFixed(2)} °`;
-        updateChart(val);
-      }
-    });
-  </script>
+document.addEventListener("keydown", e => {
+  if (e.key === "Enter") publishSetpoint();
+});
+
+// ── MQTT incoming ──────────────────────────────────────
+let sampleCount = 0;
+let t0 = Date.now();
+
+client.on("message", (topic, message) => {
+  if (topic !== topicSub) return;
+  const val = parseFloat(message.toString());
+  if (isNaN(val)) return;
+
+  sampleCount++;
+  const err = currentRef - val;
+
+  pushData(buffers.main, val);
+  pushData(buffers.err,  err);
+
+  // Badges
+  document.getElementById("live-main").textContent = val.toFixed(2) + " mm";
+  document.getElementById("live-err").textContent  = err.toFixed(2) + " mm";
+
+  // Gauge (0–15 mm)
+  const pct = Math.max(0, Math.min(100, (val / 15) * 100));
+  document.getElementById("gaugeFill").style.width = pct + "%";
+  document.getElementById("gaugeVal").textContent  = val.toFixed(2) + " mm";
+
+  document.getElementById("p-samples").textContent = sampleCount;
+});
+
+// ── Canvas setup ───────────────────────────────────────
+function setupCanvas(id) {
+  const c = document.getElementById("canvas-" + id);
+  const p = c.parentElement;
+  c.width = p.clientWidth; c.height = p.clientHeight;
+  return c;
+}
+const canvases = {
+  main: setupCanvas("main"),
+  err:  setupCanvas("err"),
+  ctrl: setupCanvas("ctrl")
+};
+window.addEventListener("resize", () => {
+  Object.keys(canvases).forEach(k => {
+    const c = canvases[k], p = c.parentElement;
+    c.width = p.clientWidth; c.height = p.clientHeight;
+  });
+});
+
+// ── Buffers ────────────────────────────────────────────
+const MAX_PTS = 300;
+const buffers = { main:[], err:[], ctrl:[] };
+function pushData(buf, v) {
+  buf.push({ t:(Date.now()-t0)/1000, v });
+  if (buf.length > MAX_PTS) buf.shift();
+}
+
+// ── Draw ───────────────────────────────────────────────
+function drawPlot(canvas, buf, color, yMin, yMax) {
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = "rgba(0,212,255,0.06)"; ctx.lineWidth = 1;
+  for (let i = 0; i <= 10; i++) {
+    ctx.beginPath(); ctx.moveTo(i*W/10,0); ctx.lineTo(i*W/10,H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0,i*H/10); ctx.lineTo(W,i*H/10); ctx.stroke();
+  }
+
+  // Y axis labels (mm scale)
+  ctx.fillStyle = "rgba(61,104,128,0.8)";
+  ctx.font = "9px 'Share Tech Mono'";
+  [0, 5, 10, 15].forEach(v => {
+    const y = H - ((v - yMin) / (yMax - yMin)) * H;
+    ctx.fillText(v + "mm", 4, y - 2);
+    ctx.strokeStyle = "rgba(0,212,255,0.05)"; ctx.lineWidth = 1;
+    ctx.setLineDash([3,6]);
+    ctx.beginPath(); ctx.moveTo(28, y); ctx.lineTo(W, y); ctx.stroke();
+    ctx.setLineDash([]);
+  });
+
+  if (buf.length < 2) return;
+
+  const range = yMax - yMin;
+  const toY = v => H - ((v - yMin) / range) * H;
+
+  // Glow
+  ctx.shadowColor = color; ctx.shadowBlur = 10;
+  ctx.strokeStyle = color + "55"; ctx.lineWidth = 3;
+  ctx.beginPath();
+  buf.forEach((pt, i) => {
+    const x = (i / (buf.length-1)) * W;
+    i === 0 ? ctx.moveTo(x, toY(pt.v)) : ctx.lineTo(x, toY(pt.v));
+  });
+  ctx.stroke();
+
+  // Sharp line
+  ctx.shadowBlur = 0; ctx.strokeStyle = color; ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  buf.forEach((pt, i) => {
+    const x = (i / (buf.length-1)) * W;
+    i === 0 ? ctx.moveTo(x, toY(pt.v)) : ctx.lineTo(x, toY(pt.v));
+  });
+  ctx.stroke();
+
+  // End dot
+  const last = buf[buf.length-1];
+  ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 14;
+  ctx.beginPath(); ctx.arc(W-2, toY(last.v), 4, 0, Math.PI*2); ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+function renderAll() {
+  drawPlot(canvases.main, buffers.main, "#00d4ff",  0,  15);
+  drawPlot(canvases.err,  buffers.err,  "#00ffb3", -15, 15);
+  drawPlot(canvases.ctrl, buffers.ctrl, "#ffaa00",  0,  15);
+  requestAnimationFrame(renderAll);
+}
+requestAnimationFrame(renderAll);
+
+// ── Controller selector ────────────────────────────────
+function selectCtrl(btn, m) {
+  document.querySelectorAll(".ctrl-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  document.getElementById("tag-main").textContent = m;
+  if (client.connected) {
+    client.publish(topicMode, m, { qos:0, retain:true });
+  }
+}
+</script>
 </body>
 </html>
