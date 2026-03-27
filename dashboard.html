@@ -1,525 +1,1051 @@
-#include <WiFi.h>
-#include <PubSubClient.h>
-#include <Wire.h>
-#include <Adafruit_VL53L0X.h>
-#include "esp_timer.h"
-#include <math.h>
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CraneAxis — Sistema de Control Grúa Pluma</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #080c10;
+    --panel: #0b1520;
+    --panel-border: #152a40;
+    --accent: #00d4ff;
+    --accent2: #00ffb3;
+    --accent3: #ffaa00;
+    --accent4: #ff6b8a;
+    --text: #b8dff5;
+    --text-dim: #3d6880;
+    --grid: rgba(0,212,255,0.05);
+    --active: #00253a;
+    --active-warn: #2a1800;
+    --active-step: #003020;
+  }
 
-// =====================================================
-// WIFI / MQTT
-// =====================================================
-const char* WIFI_SSID     = "aaaa";
-const char* WIFI_PASSWORD = "12345678";
+  * { margin:0; padding:0; box-sizing:border-box; }
 
-const char* MQTT_BROKER = "broker.hivemq.com";
-const int   MQTT_PORT   = 1883;
-const char* CLIENT_ID   = "grua_esp32_001";
+  body {
+    background:var(--bg);
+    font-family:'Rajdhani',sans-serif;
+    color:var(--text);
+    min-height:100vh;
+    overflow-x:hidden;
+  }
 
-const char* TOPIC_PUB  = "pendulo/esp32/imu";   // ESP -> WEB
-const char* TOPIC_CMD  = "pendulo/esp32/cmd";   // WEB -> ESP
-const char* TOPIC_MODE = "pendulo/esp32/mode";  // WEB -> ESP
+  body::before {
+    content:'';
+    position:fixed;
+    inset:0;
+    background-image:
+      linear-gradient(var(--grid) 1px,transparent 1px),
+      linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+    background-size:40px 40px;
+    pointer-events:none;
+    z-index:0;
+  }
 
-WiFiClient wifiClient;
-PubSubClient mqtt(wifiClient);
+  body::after {
+    content:'';
+    position:fixed;
+    top:0;
+    right:0;
+    width:320px;
+    height:320px;
+    background: radial-gradient(ellipse at top right, rgba(0,212,255,0.04) 0%, transparent 70%);
+    pointer-events:none;
+    z-index:0;
+  }
 
-// =====================================================
-// PINES
-// =====================================================
-#define STEP_PIN 26
-#define DIR_PIN  27
-#define ENDSTOP  33
-#define POT_PIN  35
+  .wrapper {
+    position:relative;
+    z-index:1;
+    padding:16px 22px 22px;
+    max-width:1440px;
+    margin:0 auto;
+  }
 
-Adafruit_VL53L0X lox = Adafruit_VL53L0X();
+  header {
+    display:flex;
+    align-items:center;
+    gap:16px;
+    margin-bottom:16px;
+  }
 
-// =====================================================
-// CONFIG GENERAL
-// =====================================================
-volatile int currentPeriod = 2000;
-float tolerancia = 0.3;
+  .brand {
+    display:flex;
+    flex-direction:column;
+    gap:3px;
+  }
 
-int minPeriod = 800;
-int maxPeriod = 4000;
+  .brand-name {
+    font-size:22px;
+    font-weight:700;
+    letter-spacing:4px;
+    text-transform:uppercase;
+    color:var(--accent);
+    text-shadow:0 0 20px rgba(0,212,255,0.5);
+  }
 
-float period_obj = 2000;
-float period_actual = 2000;
-float slewRate = 50;
+  .brand-name span { color:var(--accent3); }
 
-float offset_distancia = -0.5;
+  .brand-sub {
+    font-family:'Share Tech Mono',monospace;
+    font-size:10px;
+    color:var(--text-dim);
+    letter-spacing:2px;
+  }
 
-// =====================================================
-// FILTROS
-// =====================================================
-float distancia_filtrada = 0.0;
-const float deadband_dist = 0.3;
+  .crane-icon {
+    width:42px;
+    height:42px;
+    position:relative;
+    flex-shrink:0;
+  }
 
-float angulo_filtrado = 0.0;
-const float deadband_ang = 0.7;
+  .crane-icon::before {
+    content:'🏗';
+    font-size:30px;
+    filter: drop-shadow(0 0 6px rgba(0,212,255,0.6));
+  }
 
-// =====================================================
-// TIMERS
-// =====================================================
-volatile bool flag20ms = false;
-esp_timer_handle_t timer20ms;
-esp_timer_handle_t stepTimer;
+  .conn-pill {
+    margin-left:auto;
+    display:flex;
+    align-items:center;
+    gap:8px;
+    background:var(--panel);
+    border:1px solid var(--panel-border);
+    border-radius:20px;
+    padding:6px 16px;
+    font-family:'Share Tech Mono',monospace;
+    font-size:11px;
+    color:var(--text-dim);
+    transition:all 0.3s;
+  }
 
-// =====================================================
-// MOTOR
-// =====================================================
-volatile bool motionActive = false;
-portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+  .conn-pill.connected  { border-color:var(--accent2); color:var(--accent2); }
+  .conn-pill.error      { border-color:#ff4444; color:#ff4444; }
+  .conn-pill.connecting { border-color:var(--accent3); color:var(--accent3); }
 
-// =====================================================
-// VARIABLES DE ESTADO
-// =====================================================
-float angulo = 0.0;
-float distancia_cm = 0.0;
+  .conn-dot {
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    background:currentColor;
+    box-shadow:0 0 6px currentColor;
+    animation:pulse 1.5s ease-in-out infinite;
+  }
 
-float distancia_home = 0.0;
-float Dcurr = 0.0;   // posicion actual absoluta 0..10
-float Dobj  = 0.0;   // referencia absoluta 0..10
+  @keyframes pulse {
+    0%,100% { opacity:1; }
+    50% { opacity:0.3; }
+  }
 
-bool homing = false;
+  .top-bar {
+    display:flex;
+    align-items:flex-end;
+    gap:14px;
+    margin-bottom:16px;
+    flex-wrap:wrap;
+  }
 
-// =====================================================
-// FILTRO POT
-// =====================================================
-const int N = 10;
-int bufferPot[N] = {0};
-int indexPot = 0;
-long sumaPot = 0;
+  .selector-col {
+    display:flex;
+    flex-direction:column;
+    gap:5px;
+  }
 
-// =====================================================
-// MODOS DE ENTRADA
-// =====================================================
-enum Mode {IDLE, SQUARE, RAMP, SINE};
-Mode currentMode = IDLE;
+  .bar-label {
+    font-family:'Share Tech Mono',monospace;
+    font-size:9px;
+    letter-spacing:3px;
+    color:var(--text-dim);
+    text-transform:uppercase;
+  }
 
-int ciclos = 0;
-float t_wave = 0.0;
+  .selector-bar,
+  .input-selector-bar {
+    display:inline-flex;
+    background:var(--panel);
+    border:1px solid var(--panel-border);
+    border-radius:6px;
+    padding:4px;
+    gap:4px;
+  }
 
-// =====================================================
-// MODOS DE CONTROL
-// =====================================================
-enum ControlMode {CTRL_PID, CTRL_LGR, CTRL_OSC, CTRL_SERVO};
-ControlMode currentControlMode = CTRL_PID;
+  .ctrl-btn,
+  .input-btn {
+    font-family:'Rajdhani',sans-serif;
+    font-weight:700;
+    font-size:12px;
+    letter-spacing:2px;
+    text-transform:uppercase;
+    padding:8px 18px;
+    border:1px solid transparent;
+    border-radius:4px;
+    background:transparent;
+    color:var(--text-dim);
+    cursor:pointer;
+    transition:all 0.2s;
+    white-space:nowrap;
+  }
 
-// =====================================================
-// GANANCIAS
-// =====================================================
-float Kp_vel_PID   = 120.0;
-float Kp_ang_PID   = 8.0;
+  .ctrl-btn:hover {
+    color:var(--accent);
+    border-color:rgba(0,212,255,0.3);
+    background:rgba(0,212,255,0.05);
+  }
 
-float Kp_vel_LGR   = 120.0;
-float Kp_ang_LGR   = 8.0;
+  .ctrl-btn.active {
+    background:var(--active);
+    border-color:var(--accent);
+    color:var(--accent);
+    box-shadow:0 0 18px rgba(0,212,255,0.25);
+    text-shadow:0 0 10px rgba(0,212,255,0.7);
+  }
 
-float Kp_vel_OSC   = 120.0;
-float Kp_ang_OSC   = 8.0;
+  .input-btn:hover {
+    color:var(--accent2);
+    border-color:rgba(0,255,179,0.3);
+    background:rgba(0,255,179,0.05);
+  }
 
-float Kp_vel_SERVO = 120.0;
-float Kp_ang_SERVO = 8.0;
+  .input-btn.active {
+    background:var(--active-step);
+    border-color:var(--accent2);
+    color:var(--accent2);
+    box-shadow:0 0 18px rgba(0,255,179,0.2);
+    text-shadow:0 0 10px rgba(0,255,179,0.6);
+  }
 
-// salidas para telemetria
-float u_pos = 0.0;
-float u_ang = 0.0;
+  .input-btn.home-btn {
+    color:var(--accent3);
+    border-color:rgba(255,170,0,0.2);
+  }
 
-// =====================================================
-// TIMER 20 ms
-// =====================================================
-void onTimer(void* arg) {
-  flag20ms = true;
+  .input-btn.home-btn:hover {
+    color:var(--accent3);
+    border-color:rgba(255,170,0,0.5);
+    background:rgba(255,170,0,0.07);
+  }
+
+  .input-btn.home-btn.active {
+    background:var(--active-warn);
+    border-color:var(--accent3);
+    color:var(--accent3);
+    box-shadow:0 0 18px rgba(255,170,0,0.2);
+    text-shadow:0 0 10px rgba(255,170,0,0.6);
+  }
+
+  .input-key-hint {
+    font-size:9px;
+    letter-spacing:0;
+    font-weight:400;
+    opacity:0.5;
+    margin-left:3px;
+  }
+
+  .setpoint-card {
+    display:flex;
+    align-items:center;
+    gap:12px;
+    background:var(--panel);
+    border:1px solid var(--panel-border);
+    border-radius:8px;
+    padding:10px 16px;
+    box-shadow:0 0 20px rgba(0,212,255,0.04);
+  }
+
+  .setpoint-card label {
+    font-family:'Share Tech Mono',monospace;
+    font-size:10px;
+    color:var(--text-dim);
+    letter-spacing:2px;
+    text-transform:uppercase;
+    white-space:nowrap;
+  }
+
+  .range-hint {
+    font-family:'Share Tech Mono',monospace;
+    font-size:9px;
+    color:var(--text-dim);
+    letter-spacing:1px;
+    white-space:nowrap;
+  }
+
+  #spSlider {
+    width:100%;
+    height:8px;
+    background:#030810;
+    border:1px solid var(--panel-border);
+    border-radius:8px;
+    outline:none;
+    accent-color:#00d4ff;
+  }
+
+  .send-btn {
+    font-family:'Rajdhani',sans-serif;
+    font-weight:700;
+    font-size:13px;
+    letter-spacing:2px;
+    text-transform:uppercase;
+    padding:9px 20px;
+    border-radius:6px;
+    cursor:pointer;
+    transition:all 0.2s;
+    border:1px solid var(--accent);
+    background:rgba(0,212,255,0.1);
+    color:var(--accent);
+  }
+
+  .send-btn:hover:not(:disabled) {
+    background:rgba(0,212,255,0.22);
+    box-shadow:0 0 18px rgba(0,212,255,0.4);
+  }
+
+  .send-btn:disabled {
+    opacity:0.35;
+    cursor:not-allowed;
+  }
+
+  .last-sent {
+    font-family:'Share Tech Mono',monospace;
+    font-size:10px;
+    color:var(--text-dim);
+    letter-spacing:1px;
+    white-space:nowrap;
+  }
+
+  .input-status-pill {
+    display:flex;
+    align-items:center;
+    gap:8px;
+    background:var(--panel);
+    border:1px solid var(--panel-border);
+    border-radius:8px;
+    padding:8px 16px;
+    font-family:'Share Tech Mono',monospace;
+    font-size:11px;
+    color:var(--text-dim);
+    transition:all 0.3s;
+  }
+
+  .input-status-pill.active-square { border-color:#7ee6ff; color:#7ee6ff; }
+  .input-status-pill.active-ramp   { border-color:var(--accent2); color:var(--accent2); }
+  .input-status-pill.active-sine   { border-color:var(--accent4); color:var(--accent4); }
+  .input-status-pill.active-home   { border-color:var(--accent3); color:var(--accent3); }
+
+  .ips-dot {
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    background:currentColor;
+    box-shadow:0 0 6px currentColor;
+  }
+
+  .gauge-wrap {
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:3px;
+    background:var(--panel);
+    border:1px solid var(--panel-border);
+    border-radius:8px;
+    padding:8px 14px;
+  }
+
+  .gauge-label {
+    font-family:'Share Tech Mono',monospace;
+    font-size:9px;
+    color:var(--text-dim);
+    letter-spacing:2px;
+    text-transform:uppercase;
+  }
+
+  .gauge-bar-outer {
+    width:140px;
+    height:10px;
+    background:#0a1820;
+    border-radius:5px;
+    border:1px solid var(--panel-border);
+    overflow:hidden;
+  }
+
+  .gauge-bar-inner {
+    height:100%;
+    width:0%;
+    border-radius:5px;
+    background: linear-gradient(90deg, var(--accent2), var(--accent));
+    box-shadow:0 0 8px var(--accent);
+    transition: width 0.3s ease;
+  }
+
+  .gauge-val {
+    font-family:'Share Tech Mono',monospace;
+    font-size:13px;
+    color:var(--accent);
+    text-shadow:0 0 8px rgba(0,212,255,0.5);
+  }
+
+  .plots-grid {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    grid-template-rows:auto auto;
+    gap:14px;
+  }
+
+  .plot-panel {
+    background:var(--panel);
+    border:1px solid var(--panel-border);
+    border-radius:8px;
+    overflow:hidden;
+    transition:border-color 0.3s;
+  }
+
+  .plot-panel:hover { border-color:rgba(0,212,255,0.4); }
+
+  .panel-header {
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:9px 14px;
+    border-bottom:1px solid var(--panel-border);
+    background:rgba(0,212,255,0.025);
+  }
+
+  .panel-title {
+    font-family:'Share Tech Mono',monospace;
+    font-size:10px;
+    letter-spacing:2px;
+    color:var(--text-dim);
+    text-transform:uppercase;
+  }
+
+  .panel-tag {
+    margin-left:auto;
+    font-family:'Share Tech Mono',monospace;
+    font-size:10px;
+    padding:2px 8px;
+    border-radius:3px;
+    background:rgba(0,212,255,0.08);
+    border:1px solid rgba(0,212,255,0.2);
+    color:var(--accent);
+    letter-spacing:1px;
+  }
+
+  .canvas-area {
+    position:relative;
+    overflow:hidden;
+    height:230px;
+  }
+
+  canvas {
+    display:block;
+    width:100%;
+    height:100%;
+  }
+
+  .live-badge {
+    position:absolute;
+    top:8px;
+    right:8px;
+    background:rgba(0,255,179,0.07);
+    border:1px solid rgba(0,255,179,0.28);
+    border-radius:4px;
+    padding:3px 10px;
+    font-family:'Share Tech Mono',monospace;
+    font-size:12px;
+    color:var(--accent2);
+    text-shadow:0 0 8px var(--accent2);
+    display:flex;
+    align-items:center;
+    gap:6px;
+  }
+
+  .live-badge::before {
+    content:'';
+    width:6px;
+    height:6px;
+    border-radius:50%;
+    background:var(--accent2);
+    box-shadow:0 0 6px var(--accent2);
+    animation:pulse 1s ease-in-out infinite;
+  }
+
+  .canvas-area::after {
+    content:'';
+    position:absolute;
+    inset:0;
+    background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.06) 2px,rgba(0,0,0,0.06) 4px);
+    pointer-events:none;
+  }
+
+  .axis-x, .axis-y {
+    position:absolute;
+    font-family:'Share Tech Mono',monospace;
+    font-size:9px;
+    color:var(--text-dim);
+  }
+
+  .axis-x { bottom:6px; right:10px; }
+  .axis-y { top:8px; left:8px; writing-mode:vertical-rl; transform:rotate(180deg); }
+
+  .footer-strip {
+    margin-top:14px;
+    display:flex;
+    align-items:center;
+    gap:20px;
+    background:var(--panel);
+    border:1px solid var(--panel-border);
+    border-radius:8px;
+    padding:8px 18px;
+    flex-wrap:wrap;
+  }
+
+  .mqtt-topic {
+    font-family:'Share Tech Mono',monospace;
+    font-size:9px;
+    color:var(--text-dim);
+    letter-spacing:1px;
+    line-height:2;
+  }
+
+  .mqtt-topic span { color:var(--accent3); }
+
+  .sample-count {
+    margin-left:auto;
+    font-family:'Share Tech Mono',monospace;
+    font-size:9px;
+    color:var(--text-dim);
+    text-align:right;
+  }
+
+  .sample-count b {
+    color:var(--accent);
+    font-size:16px;
+    display:block;
+  }
+
+  @media (max-width:900px) {
+    .wrapper { padding:12px 14px 18px; }
+    .top-bar { flex-direction:column; align-items:stretch; gap:10px; }
+    .selector-bar, .input-selector-bar { width:100%; justify-content:space-between; }
+    .ctrl-btn, .input-btn { flex:1; padding:8px 6px; font-size:11px; letter-spacing:1px; text-align:center; }
+    .setpoint-card { flex-wrap:wrap; gap:8px; }
+    .gauge-wrap { flex-direction:row; align-items:center; gap:10px; width:100%; }
+    .gauge-bar-outer { flex:1; width:auto; }
+    .canvas-area { height:200px !important; }
+  }
+
+  @media (max-width:540px) {
+    .wrapper { padding:10px 10px 16px; }
+    header { gap:8px; flex-wrap:wrap; }
+    .crane-icon { display:none; }
+    .brand-name { font-size:16px; letter-spacing:1px; }
+    .brand-sub { display:none; }
+    .conn-pill { font-size:10px; padding:4px 10px; }
+    .selector-bar, .input-selector-bar { display:grid; grid-template-columns:1fr 1fr; width:100%; }
+    .ctrl-btn, .input-btn { padding:10px 4px; font-size:11px; letter-spacing:0.5px; }
+    .setpoint-card { flex-direction:column; align-items:flex-start; gap:10px; padding:12px; }
+    .send-btn { width:100%; padding:14px; font-size:15px; letter-spacing:3px; border-radius:8px; }
+    .gauge-wrap { flex-direction:row; width:100%; align-items:center; gap:10px; padding:10px 14px; }
+    .gauge-bar-outer { flex:1; width:auto; height:12px; }
+    .plots-grid { grid-template-columns:1fr; }
+    .canvas-area { height:180px !important; }
+    .footer-strip { flex-direction:column; align-items:flex-start; gap:6px; padding:10px 14px; }
+    .sample-count { margin-left:0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrapper">
+
+  <header>
+    <div class="crane-icon"></div>
+    <div class="brand">
+      <div class="brand-name">Crane<span>Axis</span></div>
+      <div class="brand-sub">SISTEMA DE CONTROL — GRÚA PLUMA · ESP32 + MQTT</div>
+    </div>
+    <div class="conn-pill connecting" id="connPill">
+      <div class="conn-dot"></div>
+      <span id="connText">Conectando...</span>
+    </div>
+  </header>
+
+  <div class="top-bar">
+
+    <div class="selector-col">
+      <div class="bar-label">// Modo de control</div>
+      <div class="selector-bar">
+        <button class="ctrl-btn active" onclick="selectCtrl(this,'PID')">PID</button>
+        <button class="ctrl-btn" onclick="selectCtrl(this,'LGR')">LGR</button>
+        <button class="ctrl-btn" onclick="selectCtrl(this,'OSC')">Osc. Muertas</button>
+        <button class="ctrl-btn" onclick="selectCtrl(this,'SERVO')">Servo</button>
+      </div>
+    </div>
+
+    <div class="selector-col">
+      <div class="bar-label">// Tipo de entrada</div>
+      <div class="input-selector-bar">
+        <button class="input-btn active" id="btnStep"   onclick="selectInput('STEP')">Step<span class="input-key-hint">[F/B]</span></button>
+        <button class="input-btn"        id="btnSquare" onclick="selectInput('SQUARE')">Cuadrada<span class="input-key-hint">[Q]</span></button>
+        <button class="input-btn"        id="btnRamp"   onclick="selectInput('RAMP')">Rampa<span class="input-key-hint">[R]</span></button>
+        <button class="input-btn"        id="btnSine"   onclick="selectInput('SINE')">Seno<span class="input-key-hint">[S]</span></button>
+        <button class="input-btn home-btn" id="btnHome" onclick="selectInput('HOME')">⌂ Home<span class="input-key-hint">[H]</span></button>
+      </div>
+    </div>
+
+    <div class="setpoint-card" id="spCard">
+      <label for="spSlider">Posición objetivo</label>
+
+      <div style="display:flex; flex-direction:column; gap:8px; min-width:220px; width:260px;">
+        <input id="spSlider" type="range" min="0" max="10" step="1" value="0">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <span class="range-hint">0 – 10</span>
+          <span id="spValue"
+                style="font-family:'Share Tech Mono',monospace; font-size:18px; color:var(--accent);">
+            0
+          </span>
+        </div>
+      </div>
+
+      <button id="sendBtn" class="send-btn" disabled onclick="publishSetpoint()">▶ Enviar</button>
+      <span class="last-sent" id="lastSent">Último: --</span>
+    </div>
+
+    <div class="input-status-pill" id="inputStatusPill" style="display:none;">
+      <div class="ips-dot"></div>
+      <span id="inputStatusText">--</span>
+    </div>
+
+    <div class="gauge-wrap">
+      <div class="gauge-label">Posición actual</div>
+      <div class="gauge-bar-outer"><div class="gauge-bar-inner" id="gaugeFill"></div></div>
+      <div class="gauge-val" id="gaugeVal">--</div>
+    </div>
+
+  </div>
+
+  <div class="plots-grid">
+
+    <div class="plot-panel">
+      <div class="panel-header">
+        <div class="panel-title">Referencia &amp; Posición x(t)</div>
+        <div class="panel-tag" id="tag-main">LIVE</div>
+      </div>
+      <div class="canvas-area">
+        <canvas id="canvas-pos"></canvas>
+        <div class="live-badge" id="live-pos">--</div>
+        <div class="axis-x">t (s) →</div>
+        <div class="axis-y">x / ref ↑</div>
+      </div>
+    </div>
+
+    <div class="plot-panel">
+      <div class="panel-header">
+        <div class="panel-title">Error Posición e_x(t) &amp; Ángulo e_θ(t)</div>
+        <div class="panel-tag">ERR</div>
+      </div>
+      <div class="canvas-area">
+        <canvas id="canvas-err"></canvas>
+        <div class="live-badge" id="live-err">--</div>
+        <div class="axis-x">t (s) →</div>
+        <div class="axis-y">error ↑</div>
+      </div>
+    </div>
+
+    <div class="plot-panel">
+      <div class="panel-header">
+        <div class="panel-title">Señal de Control Posición u_x(t)</div>
+        <div class="panel-tag">CMD-X</div>
+      </div>
+      <div class="canvas-area">
+        <canvas id="canvas-ux"></canvas>
+        <div class="live-badge" id="live-ux">-- u</div>
+        <div class="axis-x">t (s) →</div>
+        <div class="axis-y">u_x ↑</div>
+      </div>
+    </div>
+
+    <div class="plot-panel">
+      <div class="panel-header">
+        <div class="panel-title">Señal de Control Ángulo u_θ(t)</div>
+        <div class="panel-tag">CMD-θ</div>
+      </div>
+      <div class="canvas-area">
+        <canvas id="canvas-uth"></canvas>
+        <div class="live-badge" id="live-uth">-- u</div>
+        <div class="axis-x">t (s) →</div>
+        <div class="axis-y">u_θ ↑</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footer-strip">
+    <div class="mqtt-topic">
+      SUB <span>pendulo/esp32/imu</span><br>
+      PUB <span>pendulo/esp32/cmd</span> · MODE <span>pendulo/esp32/mode</span>
+    </div>
+    <div class="sample-count">
+      MUESTRAS<b id="p-samples">0</b>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const broker    = "wss://broker.hivemq.com:8884/mqtt";
+const topicSub  = "pendulo/esp32/imu";
+const topicPub  = "pendulo/esp32/cmd";
+const topicMode = "pendulo/esp32/mode";
+const client    = mqtt.connect(broker);
+
+const connPill   = document.getElementById("connPill");
+const connText   = document.getElementById("connText");
+const sendBtn    = document.getElementById("sendBtn");
+const spSlider   = document.getElementById("spSlider");
+const spValue    = document.getElementById("spValue");
+const lastSentEl = document.getElementById("lastSent");
+const spCard     = document.getElementById("spCard");
+const inputStatusPill = document.getElementById("inputStatusPill");
+const inputStatusText = document.getElementById("inputStatusText");
+
+let currentInputMode = "STEP";
+let currentRef = 0;
+let xActual = 0;
+
+spSlider.addEventListener("input", () => {
+  spValue.textContent = spSlider.value;
+});
+
+function setConn(state, msg) {
+  connPill.className = "conn-pill " + state;
+  connText.textContent = msg;
+  sendBtn.disabled = (state !== "connected") || currentInputMode !== "STEP";
 }
 
-// =====================================================
-// TIMER STEP
-// =====================================================
-void onStepTimer(void* arg) {
-  portENTER_CRITICAL_ISR(&timerMux);
+client.on("connect", () => {
+  setConn("connected", "🟢 Conectado — HiveMQ");
+  client.subscribe(topicSub);
+});
 
-  if (motionActive) {
-    digitalWrite(STEP_PIN, HIGH);
-    ets_delay_us(2);
-    digitalWrite(STEP_PIN, LOW);
-  }
+client.on("reconnect", () => setConn("connecting", "🟡 Reintentando..."));
+client.on("close", () => setConn("error", "🔴 Desconectado"));
+client.on("error", e => setConn("error", "🔴 " + e.message));
 
-  portEXIT_CRITICAL_ISR(&timerMux);
-}
+function selectInput(mode) {
+  currentInputMode = mode;
 
-// =====================================================
-// FILTROS
-// =====================================================
-float aplicarFiltro(float nueva_dist) {
-  if (abs(nueva_dist - distancia_filtrada) > deadband_dist) {
-    distancia_filtrada = nueva_dist;
-  }
-  return distancia_filtrada;
-}
+  document.getElementById("btnStep")?.classList.remove("active");
+  document.getElementById("btnSquare")?.classList.remove("active");
+  document.getElementById("btnRamp")?.classList.remove("active");
+  document.getElementById("btnSine")?.classList.remove("active");
+  document.getElementById("btnHome")?.classList.remove("active");
 
-float aplicarFiltroAngulo(float nuevo_ang) {
-  if (abs(nuevo_ang - angulo_filtrado) > deadband_ang) {
-    angulo_filtrado = nuevo_ang;
-  }
-  return angulo_filtrado;
-}
-
-// =====================================================
-// WIFI
-// =====================================================
-void conectarWiFi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-  }
-}
-
-// =====================================================
-// MQTT
-// =====================================================
-void reconnectMQTT() {
-  while (!mqtt.connected()) {
-    if (mqtt.connect(CLIENT_ID)) {
-      mqtt.subscribe(TOPIC_CMD);
-      mqtt.subscribe(TOPIC_MODE);
-    } else {
-      delay(1500);
-    }
-  }
-}
-
-// =====================================================
-// CONTROL MODE
-// =====================================================
-void procesarModoControl(String modo) {
-  modo.trim();
-
-  if (modo == "PID")       currentControlMode = CTRL_PID;
-  else if (modo == "LGR")  currentControlMode = CTRL_LGR;
-  else if (modo == "OSC")  currentControlMode = CTRL_OSC;
-  else if (modo == "SERVO") currentControlMode = CTRL_SERVO;
-}
-
-// =====================================================
-// COMANDOS
-// STEP relativo:
-//   F10 -> avanzar +10 desde posicion actual
-//   B2  -> retroceder -2 desde posicion actual
-// GUI ya convierte absoluto -> relativo
-// =====================================================
-void procesarComando(String cmd) {
-  cmd.trim();
-
-  if (cmd.length() == 0) return;
-
-  if (cmd == "H") {
-    portENTER_CRITICAL(&timerMux);
-    homing = true;
-    currentMode = IDLE;
-    digitalWrite(DIR_PIN, LOW);
-    motionActive = true;
-    portEXIT_CRITICAL(&timerMux);
-    return;
-  }
-
-  if (cmd == "Q") {
-    currentMode = SQUARE;
-    ciclos = 0;
-    Dobj = 10.0;
-    return;
-  }
-
-  if (cmd == "R") {
-    currentMode = RAMP;
-    ciclos = 0;
-    t_wave = 0.0;
-    return;
-  }
-
-  if (cmd == "S") {
-    currentMode = SINE;
-    ciclos = 0;
-    t_wave = 0.0;
-    return;
-  }
-
-  if (cmd.startsWith("F") || cmd.startsWith("B")) {
-    float delta = cmd.substring(1).toFloat();
-    delta = constrain(delta, 0.0, 10.0);
-
-    portENTER_CRITICAL(&timerMux);
-
-    if (cmd.startsWith("F")) {
-      Dobj = constrain(Dcurr + delta, 0.0, 10.0);
-    } else {
-      Dobj = constrain(Dcurr - delta, 0.0, 10.0);
-    }
-
-    currentMode = IDLE;
-    portEXIT_CRITICAL(&timerMux);
-    return;
-  }
-}
-
-// =====================================================
-// CALLBACK MQTT
-// =====================================================
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  String msg = "";
-  for (unsigned int i = 0; i < length; i++) {
-    msg += (char)payload[i];
-  }
-
-  String top = String(topic);
-
-  if (top == TOPIC_CMD) {
-    procesarComando(msg);
-  } else if (top == TOPIC_MODE) {
-    procesarModoControl(msg);
-  }
-}
-
-// =====================================================
-// PUBLICAR 6 DATOS
-// ref,pos,err_pos,err_ang,u_pos,u_ang
-// =====================================================
-void publicarDatos(float ref, float pos, float errPos, float errAng, float uPos, float uAng) {
-  String payload = "";
-  payload += String(ref, 3);    payload += ",";
-  payload += String(pos, 3);    payload += ",";
-  payload += String(errPos, 3); payload += ",";
-  payload += String(errAng, 3); payload += ",";
-  payload += String(uPos, 3);   payload += ",";
-  payload += String(uAng, 3);
-
-  mqtt.publish(TOPIC_PUB, payload.c_str());
-}
-
-// =====================================================
-// CONTROL
-// =====================================================
-void calcularControl(float ErrD, float ErrAng) {
-  float kpVel = Kp_vel_PID;
-  float kpAng = Kp_ang_PID;
-
-  switch (currentControlMode) {
-    case CTRL_PID:
-      kpVel = Kp_vel_PID;
-      kpAng = Kp_ang_PID;
-      break;
-
-    case CTRL_LGR:
-      kpVel = Kp_vel_LGR;
-      kpAng = Kp_ang_LGR;
-      break;
-
-    case CTRL_OSC:
-      kpVel = Kp_vel_OSC;
-      kpAng = Kp_ang_OSC;
-      break;
-
-    case CTRL_SERVO:
-      kpVel = Kp_vel_SERVO;
-      kpAng = Kp_ang_SERVO;
-      break;
-  }
-
-  u_pos = kpVel * abs(ErrD);
-  u_ang = kpAng * ErrAng;
-
-  float base_period = maxPeriod - u_pos;
-  base_period = constrain(base_period, minPeriod, maxPeriod);
-
-  period_obj = base_period - u_ang;
-  period_obj = constrain(period_obj, minPeriod, maxPeriod);
-}
-
-// =====================================================
-// SETUP
-// =====================================================
-void setup() {
-  Serial.begin(115200);
-  Wire.begin();
-
-  pinMode(STEP_PIN, OUTPUT);
-  pinMode(DIR_PIN, OUTPUT);
-  pinMode(ENDSTOP, INPUT_PULLUP);
-  pinMode(POT_PIN, INPUT);
-
-  digitalWrite(STEP_PIN, LOW);
-
-  if (!lox.begin()) {
-    while (1);
-  }
-
-  lox.configSensor(Adafruit_VL53L0X::VL53L0X_SENSE_HIGH_SPEED);
-
-  for (int i = 0; i < N; i++) {
-    bufferPot[i] = 0;
-  }
-
-  conectarWiFi();
-  mqtt.setServer(MQTT_BROKER, MQTT_PORT);
-  mqtt.setCallback(mqttCallback);
-
-  esp_timer_create_args_t t1 = {
-    .callback = &onTimer,
-    .dispatch_method = ESP_TIMER_TASK,
-    .name = "timer20ms"
+  const btnMap = {
+    STEP: "btnStep",
+    SQUARE: "btnSquare",
+    RAMP: "btnRamp",
+    SINE: "btnSine",
+    HOME: "btnHome"
   };
-  esp_timer_create(&t1, &timer20ms);
-  esp_timer_start_periodic(timer20ms, 20000);
 
-  esp_timer_create_args_t t2 = {
-    .callback = &onStepTimer,
-    .dispatch_method = ESP_TIMER_TASK,
-    .name = "stepTimer"
+  document.getElementById(btnMap[mode])?.classList.add("active");
+
+  if (mode === "STEP") {
+    spCard.style.display = "";
+    inputStatusPill.style.display = "none";
+    sendBtn.disabled = !client.connected;
+  } else {
+    spCard.style.display = "none";
+    inputStatusPill.style.display = "";
+
+    const cfg = {
+      SQUARE: { cls:"active-square", txt:"CUADRADA activa — cmd: Q" },
+      RAMP:   { cls:"active-ramp",   txt:"RAMPA activa — cmd: R" },
+      SINE:   { cls:"active-sine",   txt:"SENO activo — cmd: S" },
+      HOME:   { cls:"active-home",   txt:"HOME — retornando a 0" }
+    };
+
+    inputStatusPill.className = "input-status-pill " + (cfg[mode]?.cls || "");
+    inputStatusText.textContent = cfg[mode]?.txt || "--";
+    sendBtn.disabled = true;
+  }
+
+  const cmdMap = {
+    SQUARE: "Q",
+    RAMP: "R",
+    SINE: "S",
+    HOME: "H"
   };
-  esp_timer_create(&t2, &stepTimer);
-  esp_timer_start_periodic(stepTimer, currentPeriod);
-}
 
-// =====================================================
-// LOOP
-// =====================================================
-void loop() {
-  if (!mqtt.connected()) {
-    reconnectMQTT();
-  }
-  mqtt.loop();
-
-  static int contador = 0;
-
-  if (flag20ms) {
-    flag20ms = false;
-
-    // ===================== HOMING
-    if (homing) {
-      VL53L0X_RangingMeasurementData_t measure;
-      lox.rangingTest(&measure, false);
-
-      if (measure.RangeStatus != 4) {
-        float nueva_dist = (measure.RangeMilliMeter / 10.0) + offset_distancia;
-        distancia_cm = aplicarFiltro(nueva_dist);
-      }
-
-      if (digitalRead(ENDSTOP) == LOW) {
-        portENTER_CRITICAL(&timerMux);
-        motionActive = false;
-        portEXIT_CRITICAL(&timerMux);
-
-        homing = false;
-        distancia_home = distancia_cm;
-        Dcurr = 0.0;
-        Dobj = 0.0;
-      }
-
-      publicarDatos(Dobj, Dcurr, Dobj - Dcurr, angulo, u_pos, u_ang);
-      return;
-    }
-
-    // ===================== ANGULO
-    int potValue = analogRead(POT_PIN);
-
-    sumaPot -= bufferPot[indexPot];
-    bufferPot[indexPot] = potValue;
-    sumaPot += potValue;
-    indexPot = (indexPot + 1) % N;
-
-    float potFiltrado = sumaPot / (float)N;
-    float nuevo_angulo = ((potFiltrado / 4095.0) * 270.0) - 118.0;
-    angulo = aplicarFiltroAngulo(nuevo_angulo);
-
-    if (abs(angulo) <= 0.5) angulo = 0.0;
-
-    // ===================== DISTANCIA
-    contador++;
-    if (contador >= 2) {
-      contador = 0;
-
-      VL53L0X_RangingMeasurementData_t measure;
-      lox.rangingTest(&measure, false);
-
-      if (measure.RangeStatus != 4) {
-        float nueva_dist = (measure.RangeMilliMeter / 10.0) + offset_distancia;
-        distancia_cm = aplicarFiltro(nueva_dist);
-      }
-    }
-
-    // ===================== POSICION RELATIVA
-    Dcurr = distancia_home - distancia_cm;
-    Dcurr = constrain(Dcurr, 0.0, 10.0);
-    Dobj  = constrain(Dobj, 0.0, 10.0);
-
-    // ===================== MODOS AUTOMATICOS
-    if (currentMode == SQUARE) {
-      if (abs(Dcurr - Dobj) < tolerancia) {
-        if (Dobj >= 9.9) Dobj = 0.0;
-        else {
-          Dobj = 10.0;
-          ciclos++;
-        }
-
-        if (ciclos >= 5) {
-          currentMode = IDLE;
-        }
-      }
-    }
-    else if (currentMode == RAMP) {
-      t_wave += 0.02;
-      float period = 4.0;
-      float fase = fmod(t_wave, period);
-
-      if (fase < period / 2.0)
-        Dobj = (fase / (period / 2.0)) * 10.0;
-      else
-        Dobj = (1.0 - (fase - period / 2.0) / (period / 2.0)) * 10.0;
-
-      Dobj = constrain(Dobj, 0.0, 10.0);
-
-      if (t_wave >= period * 5.0) {
-        currentMode = IDLE;
-      }
-    }
-    else if (currentMode == SINE) {
-      t_wave += 0.02;
-      float freq = 0.25;
-      Dobj = 5.0 + 5.0 * sin(2.0 * PI * freq * t_wave);
-      Dobj = constrain(Dobj, 0.0, 10.0);
-
-      if (t_wave >= (1.0 / freq) * 5.0) {
-        currentMode = IDLE;
-      }
-    }
-
-    // ===================== ERRORES
-    float ErrD   = Dobj - Dcurr;
-    float ErrAng = angulo;
-
-    // ===================== MOVIMIENTO
-    motionActive = (abs(ErrD) >= tolerancia);
-
-    if (motionActive) {
-      digitalWrite(DIR_PIN, (ErrD > 0) ? HIGH : LOW);
-    }
-
-    // ===================== CONTROL
-    calcularControl(ErrD, ErrAng);
-
-    // ===================== PERFIL SUAVE
-    if (period_actual < period_obj) period_actual += slewRate;
-    else if (period_actual > period_obj) period_actual -= slewRate;
-
-    if (abs(period_actual - period_obj) < slewRate) {
-      period_actual = period_obj;
-    }
-
-    currentPeriod = (int)period_actual;
-
-    esp_timer_stop(stepTimer);
-    esp_timer_start_periodic(stepTimer, currentPeriod);
-
-    // ===================== TELEMETRIA
-    publicarDatos(Dobj, Dcurr, ErrD, ErrAng, u_pos, u_ang);
+  if (mode !== "STEP" && client.connected) {
+    client.publish(topicPub, cmdMap[mode], { qos:0, retain:false });
   }
 }
+
+document.addEventListener("keydown", e => {
+  if (e.key === "q" || e.key === "Q") selectInput("SQUARE");
+  if (e.key === "r" || e.key === "R") selectInput("RAMP");
+  if (e.key === "s" || e.key === "S") selectInput("SINE");
+  if (e.key === "h" || e.key === "H") selectInput("HOME");
+  if (e.key === "f" || e.key === "F") selectInput("STEP");
+});
+
+function publishSetpoint() {
+  const targetAbs = parseFloat(spSlider.value);
+  if (isNaN(targetAbs)) return;
+
+  const target = Math.max(0, Math.min(10, targetAbs));
+  const tol = 0.05;
+  const delta = Math.abs(target - xActual);
+
+  if (delta <= tol) {
+    lastSentEl.textContent = `Último: ya está en ${target.toFixed(0)}`;
+    currentRef = target;
+    return;
+  }
+
+  let cmd = "";
+  if (target > xActual) {
+    cmd = `F${delta.toFixed(2)}`;
+  } else {
+    cmd = `B${delta.toFixed(2)}`;
+  }
+
+  client.publish(topicPub, cmd, { qos:0, retain:false });
+
+  currentRef = target;
+  lastSentEl.textContent = `Último: ${cmd}  → abs ${target.toFixed(0)}`;
+  selectInput("STEP");
+}
+
+let sampleCount = 0;
+let t0 = Date.now();
+
+client.on("message", (topic, message) => {
+  if (topic !== topicSub) return;
+
+  const parts = message.toString().split(",");
+  if (parts.length < 6) return;
+
+  const ref      = parseFloat(parts[0]);
+  const x        = parseFloat(parts[1]);
+  const ex       = parseFloat(parts[2]);
+  const errTheta = parseFloat(parts[3]);
+  const ux       = parseFloat(parts[4]);
+  const uth      = parseFloat(parts[5]);
+
+  if ([ref, x, ex, errTheta, ux, uth].some(isNaN)) return;
+
+  sampleCount++;
+
+  currentRef = ref;
+  xActual = x;
+
+  pushData(buffers.pos, x);
+  pushData(buffers.ex, ex);
+  pushData(buffers.ux, ux);
+  pushData(buffers.uth, uth);
+  pushData(buffers.errTh, errTheta);
+  pushData(buffers.ref, ref);
+
+  document.getElementById("live-pos").textContent  = `x:${x.toFixed(2)}  ref:${ref.toFixed(2)}`;
+  document.getElementById("live-err").textContent  = `ex:${ex.toFixed(2)}  eθ:${errTheta.toFixed(2)}`;
+  document.getElementById("live-ux").textContent   = ux.toFixed(3) + " u";
+  document.getElementById("live-uth").textContent  = uth.toFixed(3) + " u";
+
+  const pct = Math.max(0, Math.min(100, (x / 10) * 100));
+  document.getElementById("gaugeFill").style.width = pct + "%";
+  document.getElementById("gaugeVal").textContent  = x.toFixed(2);
+
+  document.getElementById("p-samples").textContent = sampleCount;
+});
+
+const canvasIds = ["pos","err","ux","uth"];
+const canvases  = {};
+
+function setupCanvas(id) {
+  const c = document.getElementById("canvas-" + id);
+  const p = c.parentElement;
+  c.width = p.clientWidth;
+  c.height = p.clientHeight;
+  canvases[id] = c;
+}
+
+canvasIds.forEach(setupCanvas);
+
+window.addEventListener("resize", () => {
+  canvasIds.forEach(id => {
+    const c = canvases[id];
+    const p = c.parentElement;
+    c.width = p.clientWidth;
+    c.height = p.clientHeight;
+  });
+});
+
+const MAX_PTS = 300;
+const buffers = { pos:[], ref:[], ex:[], errTh:[], ux:[], uth:[] };
+
+function pushData(buf, v) {
+  buf.push({ t:(Date.now()-t0)/1000, v });
+  if (buf.length > MAX_PTS) buf.shift();
+}
+
+function drawLine(ctx, buf, color, toY, W, glow) {
+  if (buf.length < 2) return;
+
+  ctx.shadowColor = color;
+  ctx.shadowBlur  = glow ? 10 : 0;
+  ctx.strokeStyle = glow ? color + "44" : color;
+  ctx.lineWidth   = glow ? 3 : 1.8;
+  ctx.beginPath();
+
+  buf.forEach((pt, i) => {
+    const x = (i / (buf.length - 1)) * W;
+    if (i === 0) ctx.moveTo(x, toY(pt.v));
+    else ctx.lineTo(x, toY(pt.v));
+  });
+
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  if (!glow) {
+    const last = buf[buf.length - 1];
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 14;
+    ctx.beginPath();
+    ctx.arc(W - 2, toY(last.v), 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+}
+
+function drawRefLine(ctx, buf, color, toY, W) {
+  if (buf.length < 2) return;
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.4;
+  ctx.setLineDash([6, 5]);
+  ctx.globalAlpha = 0.75;
+  ctx.beginPath();
+
+  buf.forEach((pt, i) => {
+    const x = (i / (buf.length - 1)) * W;
+    if (i === 0) ctx.moveTo(x, toY(pt.v));
+    else ctx.lineTo(x, toY(pt.v));
+  });
+
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+}
+
+function drawPlot(canvas, bufs, colors, yMin, yMax, legendLabels, refBuf) {
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width;
+  const H = canvas.height;
+
+  ctx.clearRect(0, 0, W, H);
+
+  ctx.strokeStyle = "rgba(0,212,255,0.06)";
+  ctx.lineWidth = 1;
+
+  for (let i = 0; i <= 10; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * W / 10, 0);
+    ctx.lineTo(i * W / 10, H);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(0, i * H / 10);
+    ctx.lineTo(W, i * H / 10);
+    ctx.stroke();
+  }
+
+  const range = yMax - yMin || 1;
+  const toY = v => H - ((Math.max(yMin, Math.min(yMax, v)) - yMin) / range) * H;
+
+  ctx.fillStyle = "rgba(61,104,128,0.8)";
+  ctx.font = "9px 'Share Tech Mono'";
+  const ticks = 5;
+
+  for (let i = 0; i <= ticks; i++) {
+    const v = yMin + (range / ticks) * i;
+    const y = H - (i / ticks) * H;
+    ctx.fillText(v.toFixed(1), 4, y - 2);
+    ctx.strokeStyle = "rgba(0,212,255,0.05)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3,6]);
+    ctx.beginPath();
+    ctx.moveTo(32, y);
+    ctx.lineTo(W, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  if (yMin < 0 && yMax > 0) {
+    const y0 = toY(0);
+    ctx.strokeStyle = "rgba(255,255,255,0.07)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4,4]);
+    ctx.beginPath();
+    ctx.moveTo(0, y0);
+    ctx.lineTo(W, y0);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  if (refBuf && refBuf.length >= 2) {
+    drawRefLine(ctx, refBuf, "#ffffff", toY, W);
+  }
+
+  bufs.forEach((buf, idx) => {
+    drawLine(ctx, buf, colors[idx], toY, W, true);
+    drawLine(ctx, buf, colors[idx], toY, W, false);
+  });
+
+  if (legendLabels && legendLabels.length > 0) {
+    const allLabels = refBuf ? ["ref", ...legendLabels] : legendLabels;
+    const allColors = refBuf ? ["rgba(255,255,255,0.6)", ...colors] : colors;
+
+    allLabels.forEach((lbl, idx) => {
+      const lx = 36 + idx * 60;
+      ctx.fillStyle = allColors[idx];
+      ctx.shadowColor = allColors[idx];
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(lx, 13, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(180,220,240,0.75)";
+      ctx.font = "9px 'Share Tech Mono'";
+      ctx.fillText(lbl, lx + 8, 17);
+    });
+  }
+}
+
+function renderAll() {
+  drawPlot(canvases.pos, [buffers.pos], ["#00d4ff"], 0, 10, ["x"], buffers.ref);
+  drawPlot(canvases.err, [buffers.ex, buffers.errTh], ["#00ffb3","#ffaa00"], -10, 10, ["e_x","e_θ"], null);
+  drawPlot(canvases.ux,  [buffers.ux],  ["#ff6b8a"], -20, 20, ["u_x"], null);
+  drawPlot(canvases.uth, [buffers.uth], ["#c470ff"], -20, 20, ["u_θ"], null);
+  requestAnimationFrame(renderAll);
+}
+
+requestAnimationFrame(renderAll);
+
+function selectCtrl(btn, m) {
+  document.querySelectorAll(".ctrl-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  document.getElementById("tag-main").textContent = m;
+  if (client.connected) {
+    client.publish(topicMode, m, { qos:0, retain:true });
+  }
+}
+</script>
+</body>
+</html>
