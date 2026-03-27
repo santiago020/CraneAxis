@@ -35,28 +35,25 @@ Adafruit_VL53L0X lox = Adafruit_VL53L0X();
 // =====================================================
 // CONFIG GENERAL
 // =====================================================
-const float stepsPerCM = 462.0;
 volatile int currentPeriod = 2000;
 float tolerancia = 0.3;
 
 int minPeriod = 800;
 int maxPeriod = 4000;
 
-// filtro de periodo
 float period_obj = 2000;
 float period_actual = 2000;
 float slewRate = 50;
 
-// offset sensor distancia
 float offset_distancia = -0.5;
 
 // =====================================================
 // FILTROS
 // =====================================================
-float distancia_filtrada = 0;
+float distancia_filtrada = 0.0;
 const float deadband_dist = 0.3;
 
-float angulo_filtrado = 0;
+float angulo_filtrado = 0.0;
 const float deadband_ang = 0.7;
 
 // =====================================================
@@ -79,8 +76,8 @@ float angulo = 0.0;
 float distancia_cm = 0.0;
 
 float distancia_home = 0.0;
-float Dcurr = 0.0;   // posicion actual
-float Dobj  = 0.0;   // referencia
+float Dcurr = 0.0;   // posicion actual absoluta 0..10
+float Dobj  = 0.0;   // referencia absoluta 0..10
 
 bool homing = false;
 
@@ -95,8 +92,8 @@ long sumaPot = 0;
 // =====================================================
 // MODOS DE ENTRADA
 // =====================================================
-enum InputMode {IN_IDLE, IN_STEP, IN_SQUARE, IN_RAMP, IN_SINE, IN_HOME};
-InputMode currentInputMode = IN_IDLE;
+enum Mode {IDLE, SQUARE, RAMP, SINE};
+Mode currentMode = IDLE;
 
 int ciclos = 0;
 float t_wave = 0.0;
@@ -108,25 +105,21 @@ enum ControlMode {CTRL_PID, CTRL_LGR, CTRL_OSC, CTRL_SERVO};
 ControlMode currentControlMode = CTRL_PID;
 
 // =====================================================
-// GANANCIAS CONTROL
+// GANANCIAS
 // =====================================================
-// -------- PID (el que ya tienes) --------
-float Kp_pos_PID = 120.0;  // equivalente a velocidad segun error posicion
-float Kp_ang_PID = 8.0;    // compensacion angular
+float Kp_vel_PID   = 120.0;
+float Kp_ang_PID   = 8.0;
 
-// -------- LGR --------
-float Kp_pos_LGR = 100.0;
-float Kp_ang_LGR = 6.0;
+float Kp_vel_LGR   = 120.0;
+float Kp_ang_LGR   = 8.0;
 
-// -------- OSC --------
-float Kp_pos_OSC = 90.0;
-float Kp_ang_OSC = 5.0;
+float Kp_vel_OSC   = 120.0;
+float Kp_ang_OSC   = 8.0;
 
-// -------- SERVO --------
-float Kp_pos_SERVO = 110.0;
-float Kp_ang_SERVO = 7.0;
+float Kp_vel_SERVO = 120.0;
+float Kp_ang_SERVO = 8.0;
 
-// variables de salida de control
+// salidas para telemetria
 float u_pos = 0.0;
 float u_ang = 0.0;
 
@@ -182,77 +175,89 @@ void conectarWiFi() {
 }
 
 // =====================================================
-// PROCESAR COMANDO DE ENTRADA
+// MQTT
 // =====================================================
-void procesarComando(String cmd) {
-  cmd.trim();
-
-  if (cmd == "H") {
-    currentInputMode = IN_HOME;
-    portENTER_CRITICAL(&timerMux);
-    homing = true;
-    digitalWrite(DIR_PIN, LOW);
-    motionActive = true;
-    portEXIT_CRITICAL(&timerMux);
-  }
-
-  else if (cmd.startsWith("F")) {
-    // ejemplo: F10
-    float x = cmd.substring(1).toFloat();
-    x = constrain(x, 0.0, 10.0);
-    Dobj = x;
-    currentInputMode = IN_STEP;
-    currentMode = IN_IDLE;
-  }
-
-  else if (cmd.startsWith("B")) {
-    // ejemplo: B5
-    float x = cmd.substring(1).toFloat();
-    x = constrain(x, 0.0, 10.0);
-    Dobj = x;
-    currentInputMode = IN_STEP;
-    currentMode = IN_IDLE;
-  }
-
-  else if (cmd == "Q") {
-    currentInputMode = IN_SQUARE;
-    currentMode = IN_SQUARE;
-    ciclos = 0;
-    Dobj = 10.0;
-  }
-
-  else if (cmd == "R") {
-    currentInputMode = IN_RAMP;
-    currentMode = IN_RAMP;
-    ciclos = 0;
-    t_wave = 0.0;
-  }
-
-  else if (cmd == "S") {
-    currentInputMode = IN_SINE;
-    currentMode = IN_SINE;
-    ciclos = 0;
-    t_wave = 0.0;
+void reconnectMQTT() {
+  while (!mqtt.connected()) {
+    if (mqtt.connect(CLIENT_ID)) {
+      mqtt.subscribe(TOPIC_CMD);
+      mqtt.subscribe(TOPIC_MODE);
+    } else {
+      delay(1500);
+    }
   }
 }
 
 // =====================================================
-// PROCESAR MODO DE CONTROL
+// CONTROL MODE
 // =====================================================
 void procesarModoControl(String modo) {
   modo.trim();
 
-  if (modo == "PID") {
-    currentControlMode = CTRL_PID;
+  if (modo == "PID")       currentControlMode = CTRL_PID;
+  else if (modo == "LGR")  currentControlMode = CTRL_LGR;
+  else if (modo == "OSC")  currentControlMode = CTRL_OSC;
+  else if (modo == "SERVO") currentControlMode = CTRL_SERVO;
+}
+
+// =====================================================
+// COMANDOS
+// STEP relativo:
+//   F10 -> avanzar +10 desde posicion actual
+//   B2  -> retroceder -2 desde posicion actual
+// GUI ya convierte absoluto -> relativo
+// =====================================================
+void procesarComando(String cmd) {
+  cmd.trim();
+
+  if (cmd.length() == 0) return;
+
+  if (cmd == "H") {
+    portENTER_CRITICAL(&timerMux);
+    homing = true;
+    currentMode = IDLE;
+    digitalWrite(DIR_PIN, LOW);
+    motionActive = true;
+    portEXIT_CRITICAL(&timerMux);
+    return;
   }
-  else if (modo == "LGR") {
-    currentControlMode = CTRL_LGR;
+
+  if (cmd == "Q") {
+    currentMode = SQUARE;
+    ciclos = 0;
+    Dobj = 10.0;
+    return;
   }
-  else if (modo == "OSC") {
-    currentControlMode = CTRL_OSC;
+
+  if (cmd == "R") {
+    currentMode = RAMP;
+    ciclos = 0;
+    t_wave = 0.0;
+    return;
   }
-  else if (modo == "SERVO") {
-    currentControlMode = CTRL_SERVO;
+
+  if (cmd == "S") {
+    currentMode = SINE;
+    ciclos = 0;
+    t_wave = 0.0;
+    return;
+  }
+
+  if (cmd.startsWith("F") || cmd.startsWith("B")) {
+    float delta = cmd.substring(1).toFloat();
+    delta = constrain(delta, 0.0, 10.0);
+
+    portENTER_CRITICAL(&timerMux);
+
+    if (cmd.startsWith("F")) {
+      Dobj = constrain(Dcurr + delta, 0.0, 10.0);
+    } else {
+      Dobj = constrain(Dcurr - delta, 0.0, 10.0);
+    }
+
+    currentMode = IDLE;
+    portEXIT_CRITICAL(&timerMux);
+    return;
   }
 }
 
@@ -269,58 +274,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
   if (top == TOPIC_CMD) {
     procesarComando(msg);
-  }
-  else if (top == TOPIC_MODE) {
+  } else if (top == TOPIC_MODE) {
     procesarModoControl(msg);
   }
-}
-
-// =====================================================
-// MQTT RECONNECT
-// =====================================================
-void reconnectMQTT() {
-  while (!mqtt.connected()) {
-    if (mqtt.connect(CLIENT_ID)) {
-      mqtt.subscribe(TOPIC_CMD);
-      mqtt.subscribe(TOPIC_MODE);
-    } else {
-      delay(1500);
-    }
-  }
-}
-
-// =====================================================
-// APLICAR LEY DE CONTROL
-// =====================================================
-void calcularControl(float ErrD, float ErrAng) {
-  switch (currentControlMode) {
-
-    case CTRL_PID:
-      u_pos = Kp_pos_PID * abs(ErrD);
-      u_ang = Kp_ang_PID * angulo;
-      break;
-
-    case CTRL_LGR:
-      u_pos = Kp_pos_LGR * abs(ErrD);
-      u_ang = Kp_ang_LGR * angulo;
-      break;
-
-    case CTRL_OSC:
-      u_pos = Kp_pos_OSC * abs(ErrD);
-      u_ang = Kp_ang_OSC * angulo;
-      break;
-
-    case CTRL_SERVO:
-      u_pos = Kp_pos_SERVO * abs(ErrD);
-      u_ang = Kp_ang_SERVO * angulo;
-      break;
-  }
-
-  float base_period = maxPeriod - u_pos;
-  base_period = constrain(base_period, minPeriod, maxPeriod);
-
-  period_obj = base_period - u_ang;
-  period_obj = constrain(period_obj, minPeriod, maxPeriod);
 }
 
 // =====================================================
@@ -340,10 +296,43 @@ void publicarDatos(float ref, float pos, float errPos, float errAng, float uPos,
 }
 
 // =====================================================
-// VARIABLE AUXILIAR para mantener compatibilidad con tu logica
+// CONTROL
 // =====================================================
-enum Mode {IDLE, SQUARE, RAMP, SINE};
-Mode currentMode = IDLE;
+void calcularControl(float ErrD, float ErrAng) {
+  float kpVel = Kp_vel_PID;
+  float kpAng = Kp_ang_PID;
+
+  switch (currentControlMode) {
+    case CTRL_PID:
+      kpVel = Kp_vel_PID;
+      kpAng = Kp_ang_PID;
+      break;
+
+    case CTRL_LGR:
+      kpVel = Kp_vel_LGR;
+      kpAng = Kp_ang_LGR;
+      break;
+
+    case CTRL_OSC:
+      kpVel = Kp_vel_OSC;
+      kpAng = Kp_ang_OSC;
+      break;
+
+    case CTRL_SERVO:
+      kpVel = Kp_vel_SERVO;
+      kpAng = Kp_ang_SERVO;
+      break;
+  }
+
+  u_pos = kpVel * abs(ErrD);
+  u_ang = kpAng * ErrAng;
+
+  float base_period = maxPeriod - u_pos;
+  base_period = constrain(base_period, minPeriod, maxPeriod);
+
+  period_obj = base_period - u_ang;
+  period_obj = constrain(period_obj, minPeriod, maxPeriod);
+}
 
 // =====================================================
 // SETUP
@@ -421,8 +410,8 @@ void loop() {
 
         homing = false;
         distancia_home = distancia_cm;
+        Dcurr = 0.0;
         Dobj = 0.0;
-        currentInputMode = IN_IDLE;
       }
 
       publicarDatos(Dobj, Dcurr, Dobj - Dcurr, angulo, u_pos, u_ang);
@@ -459,11 +448,13 @@ void loop() {
 
     // ===================== POSICION RELATIVA
     Dcurr = distancia_home - distancia_cm;
+    Dcurr = constrain(Dcurr, 0.0, 10.0);
+    Dobj  = constrain(Dobj, 0.0, 10.0);
 
-    // ===================== MODOS DE ENTRADA AUTOMATICA
+    // ===================== MODOS AUTOMATICOS
     if (currentMode == SQUARE) {
       if (abs(Dcurr - Dobj) < tolerancia) {
-        if (Dobj == 10.0) Dobj = 0.0;
+        if (Dobj >= 9.9) Dobj = 0.0;
         else {
           Dobj = 10.0;
           ciclos++;
@@ -471,7 +462,6 @@ void loop() {
 
         if (ciclos >= 5) {
           currentMode = IDLE;
-          currentInputMode = IN_IDLE;
         }
       }
     }
@@ -485,19 +475,20 @@ void loop() {
       else
         Dobj = (1.0 - (fase - period / 2.0) / (period / 2.0)) * 10.0;
 
+      Dobj = constrain(Dobj, 0.0, 10.0);
+
       if (t_wave >= period * 5.0) {
         currentMode = IDLE;
-        currentInputMode = IN_IDLE;
       }
     }
     else if (currentMode == SINE) {
       t_wave += 0.02;
       float freq = 0.25;
       Dobj = 5.0 + 5.0 * sin(2.0 * PI * freq * t_wave);
+      Dobj = constrain(Dobj, 0.0, 10.0);
 
       if (t_wave >= (1.0 / freq) * 5.0) {
         currentMode = IDLE;
-        currentInputMode = IN_IDLE;
       }
     }
 
@@ -505,14 +496,14 @@ void loop() {
     float ErrD   = Dobj - Dcurr;
     float ErrAng = angulo;
 
-    // ===================== ACTIVA MOTOR
+    // ===================== MOVIMIENTO
     motionActive = (abs(ErrD) >= tolerancia);
 
     if (motionActive) {
       digitalWrite(DIR_PIN, (ErrD > 0) ? HIGH : LOW);
     }
 
-    // ===================== CONTROL SEGUN MODO
+    // ===================== CONTROL
     calcularControl(ErrD, ErrAng);
 
     // ===================== PERFIL SUAVE
@@ -528,7 +519,7 @@ void loop() {
     esp_timer_stop(stepTimer);
     esp_timer_start_periodic(stepTimer, currentPeriod);
 
-    // ===================== PUBLICAR 6 VARIABLES
+    // ===================== TELEMETRIA
     publicarDatos(Dobj, Dcurr, ErrD, ErrAng, u_pos, u_ang);
   }
 }
