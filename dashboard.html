@@ -1,1051 +1,1057 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CraneAxis — Sistema de Control Grúa Pluma</title>
-<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg: #080c10;
-    --panel: #0b1520;
-    --panel-border: #152a40;
-    --accent: #00d4ff;
-    --accent2: #00ffb3;
-    --accent3: #ffaa00;
-    --accent4: #ff6b8a;
-    --text: #b8dff5;
-    --text-dim: #3d6880;
-    --grid: rgba(0,212,255,0.05);
-    --active: #00253a;
-    --active-warn: #2a1800;
-    --active-step: #003020;
-  }
-
-  * { margin:0; padding:0; box-sizing:border-box; }
-
-  body {
-    background:var(--bg);
-    font-family:'Rajdhani',sans-serif;
-    color:var(--text);
-    min-height:100vh;
-    overflow-x:hidden;
-  }
-
-  body::before {
-    content:'';
-    position:fixed;
-    inset:0;
-    background-image:
-      linear-gradient(var(--grid) 1px,transparent 1px),
-      linear-gradient(90deg,var(--grid) 1px,transparent 1px);
-    background-size:40px 40px;
-    pointer-events:none;
-    z-index:0;
-  }
-
-  body::after {
-    content:'';
-    position:fixed;
-    top:0;
-    right:0;
-    width:320px;
-    height:320px;
-    background: radial-gradient(ellipse at top right, rgba(0,212,255,0.04) 0%, transparent 70%);
-    pointer-events:none;
-    z-index:0;
-  }
-
-  .wrapper {
-    position:relative;
-    z-index:1;
-    padding:16px 22px 22px;
-    max-width:1440px;
-    margin:0 auto;
-  }
-
-  header {
-    display:flex;
-    align-items:center;
-    gap:16px;
-    margin-bottom:16px;
-  }
-
-  .brand {
-    display:flex;
-    flex-direction:column;
-    gap:3px;
-  }
-
-  .brand-name {
-    font-size:22px;
-    font-weight:700;
-    letter-spacing:4px;
-    text-transform:uppercase;
-    color:var(--accent);
-    text-shadow:0 0 20px rgba(0,212,255,0.5);
-  }
-
-  .brand-name span { color:var(--accent3); }
-
-  .brand-sub {
-    font-family:'Share Tech Mono',monospace;
-    font-size:10px;
-    color:var(--text-dim);
-    letter-spacing:2px;
-  }
-
-  .crane-icon {
-    width:42px;
-    height:42px;
-    position:relative;
-    flex-shrink:0;
-  }
-
-  .crane-icon::before {
-    content:'🏗';
-    font-size:30px;
-    filter: drop-shadow(0 0 6px rgba(0,212,255,0.6));
-  }
-
-  .conn-pill {
-    margin-left:auto;
-    display:flex;
-    align-items:center;
-    gap:8px;
-    background:var(--panel);
-    border:1px solid var(--panel-border);
-    border-radius:20px;
-    padding:6px 16px;
-    font-family:'Share Tech Mono',monospace;
-    font-size:11px;
-    color:var(--text-dim);
-    transition:all 0.3s;
-  }
-
-  .conn-pill.connected  { border-color:var(--accent2); color:var(--accent2); }
-  .conn-pill.error      { border-color:#ff4444; color:#ff4444; }
-  .conn-pill.connecting { border-color:var(--accent3); color:var(--accent3); }
-
-  .conn-dot {
-    width:8px;
-    height:8px;
-    border-radius:50%;
-    background:currentColor;
-    box-shadow:0 0 6px currentColor;
-    animation:pulse 1.5s ease-in-out infinite;
-  }
-
-  @keyframes pulse {
-    0%,100% { opacity:1; }
-    50% { opacity:0.3; }
-  }
-
-  .top-bar {
-    display:flex;
-    align-items:flex-end;
-    gap:14px;
-    margin-bottom:16px;
-    flex-wrap:wrap;
-  }
-
-  .selector-col {
-    display:flex;
-    flex-direction:column;
-    gap:5px;
-  }
-
-  .bar-label {
-    font-family:'Share Tech Mono',monospace;
-    font-size:9px;
-    letter-spacing:3px;
-    color:var(--text-dim);
-    text-transform:uppercase;
-  }
-
-  .selector-bar,
-  .input-selector-bar {
-    display:inline-flex;
-    background:var(--panel);
-    border:1px solid var(--panel-border);
-    border-radius:6px;
-    padding:4px;
-    gap:4px;
-  }
-
-  .ctrl-btn,
-  .input-btn {
-    font-family:'Rajdhani',sans-serif;
-    font-weight:700;
-    font-size:12px;
-    letter-spacing:2px;
-    text-transform:uppercase;
-    padding:8px 18px;
-    border:1px solid transparent;
-    border-radius:4px;
-    background:transparent;
-    color:var(--text-dim);
-    cursor:pointer;
-    transition:all 0.2s;
-    white-space:nowrap;
-  }
-
-  .ctrl-btn:hover {
-    color:var(--accent);
-    border-color:rgba(0,212,255,0.3);
-    background:rgba(0,212,255,0.05);
-  }
-
-  .ctrl-btn.active {
-    background:var(--active);
-    border-color:var(--accent);
-    color:var(--accent);
-    box-shadow:0 0 18px rgba(0,212,255,0.25);
-    text-shadow:0 0 10px rgba(0,212,255,0.7);
-  }
-
-  .input-btn:hover {
-    color:var(--accent2);
-    border-color:rgba(0,255,179,0.3);
-    background:rgba(0,255,179,0.05);
-  }
-
-  .input-btn.active {
-    background:var(--active-step);
-    border-color:var(--accent2);
-    color:var(--accent2);
-    box-shadow:0 0 18px rgba(0,255,179,0.2);
-    text-shadow:0 0 10px rgba(0,255,179,0.6);
-  }
-
-  .input-btn.home-btn {
-    color:var(--accent3);
-    border-color:rgba(255,170,0,0.2);
-  }
-
-  .input-btn.home-btn:hover {
-    color:var(--accent3);
-    border-color:rgba(255,170,0,0.5);
-    background:rgba(255,170,0,0.07);
-  }
-
-  .input-btn.home-btn.active {
-    background:var(--active-warn);
-    border-color:var(--accent3);
-    color:var(--accent3);
-    box-shadow:0 0 18px rgba(255,170,0,0.2);
-    text-shadow:0 0 10px rgba(255,170,0,0.6);
-  }
-
-  .input-key-hint {
-    font-size:9px;
-    letter-spacing:0;
-    font-weight:400;
-    opacity:0.5;
-    margin-left:3px;
-  }
-
-  .setpoint-card {
-    display:flex;
-    align-items:center;
-    gap:12px;
-    background:var(--panel);
-    border:1px solid var(--panel-border);
-    border-radius:8px;
-    padding:10px 16px;
-    box-shadow:0 0 20px rgba(0,212,255,0.04);
-  }
-
-  .setpoint-card label {
-    font-family:'Share Tech Mono',monospace;
-    font-size:10px;
-    color:var(--text-dim);
-    letter-spacing:2px;
-    text-transform:uppercase;
-    white-space:nowrap;
-  }
-
-  .range-hint {
-    font-family:'Share Tech Mono',monospace;
-    font-size:9px;
-    color:var(--text-dim);
-    letter-spacing:1px;
-    white-space:nowrap;
-  }
-
-  #spSlider {
-    width:100%;
-    height:8px;
-    background:#030810;
-    border:1px solid var(--panel-border);
-    border-radius:8px;
-    outline:none;
-    accent-color:#00d4ff;
-  }
-
-  .send-btn {
-    font-family:'Rajdhani',sans-serif;
-    font-weight:700;
-    font-size:13px;
-    letter-spacing:2px;
-    text-transform:uppercase;
-    padding:9px 20px;
-    border-radius:6px;
-    cursor:pointer;
-    transition:all 0.2s;
-    border:1px solid var(--accent);
-    background:rgba(0,212,255,0.1);
-    color:var(--accent);
-  }
-
-  .send-btn:hover:not(:disabled) {
-    background:rgba(0,212,255,0.22);
-    box-shadow:0 0 18px rgba(0,212,255,0.4);
-  }
-
-  .send-btn:disabled {
-    opacity:0.35;
-    cursor:not-allowed;
-  }
-
-  .last-sent {
-    font-family:'Share Tech Mono',monospace;
-    font-size:10px;
-    color:var(--text-dim);
-    letter-spacing:1px;
-    white-space:nowrap;
-  }
-
-  .input-status-pill {
-    display:flex;
-    align-items:center;
-    gap:8px;
-    background:var(--panel);
-    border:1px solid var(--panel-border);
-    border-radius:8px;
-    padding:8px 16px;
-    font-family:'Share Tech Mono',monospace;
-    font-size:11px;
-    color:var(--text-dim);
-    transition:all 0.3s;
-  }
-
-  .input-status-pill.active-square { border-color:#7ee6ff; color:#7ee6ff; }
-  .input-status-pill.active-ramp   { border-color:var(--accent2); color:var(--accent2); }
-  .input-status-pill.active-sine   { border-color:var(--accent4); color:var(--accent4); }
-  .input-status-pill.active-home   { border-color:var(--accent3); color:var(--accent3); }
-
-  .ips-dot {
-    width:8px;
-    height:8px;
-    border-radius:50%;
-    background:currentColor;
-    box-shadow:0 0 6px currentColor;
-  }
-
-  .gauge-wrap {
-    display:flex;
-    flex-direction:column;
-    align-items:center;
-    gap:3px;
-    background:var(--panel);
-    border:1px solid var(--panel-border);
-    border-radius:8px;
-    padding:8px 14px;
-  }
-
-  .gauge-label {
-    font-family:'Share Tech Mono',monospace;
-    font-size:9px;
-    color:var(--text-dim);
-    letter-spacing:2px;
-    text-transform:uppercase;
-  }
-
-  .gauge-bar-outer {
-    width:140px;
-    height:10px;
-    background:#0a1820;
-    border-radius:5px;
-    border:1px solid var(--panel-border);
-    overflow:hidden;
-  }
-
-  .gauge-bar-inner {
-    height:100%;
-    width:0%;
-    border-radius:5px;
-    background: linear-gradient(90deg, var(--accent2), var(--accent));
-    box-shadow:0 0 8px var(--accent);
-    transition: width 0.3s ease;
-  }
-
-  .gauge-val {
-    font-family:'Share Tech Mono',monospace;
-    font-size:13px;
-    color:var(--accent);
-    text-shadow:0 0 8px rgba(0,212,255,0.5);
-  }
-
-  .plots-grid {
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    grid-template-rows:auto auto;
-    gap:14px;
-  }
-
-  .plot-panel {
-    background:var(--panel);
-    border:1px solid var(--panel-border);
-    border-radius:8px;
-    overflow:hidden;
-    transition:border-color 0.3s;
-  }
-
-  .plot-panel:hover { border-color:rgba(0,212,255,0.4); }
-
-  .panel-header {
-    display:flex;
-    align-items:center;
-    gap:10px;
-    padding:9px 14px;
-    border-bottom:1px solid var(--panel-border);
-    background:rgba(0,212,255,0.025);
-  }
-
-  .panel-title {
-    font-family:'Share Tech Mono',monospace;
-    font-size:10px;
-    letter-spacing:2px;
-    color:var(--text-dim);
-    text-transform:uppercase;
-  }
-
-  .panel-tag {
-    margin-left:auto;
-    font-family:'Share Tech Mono',monospace;
-    font-size:10px;
-    padding:2px 8px;
-    border-radius:3px;
-    background:rgba(0,212,255,0.08);
-    border:1px solid rgba(0,212,255,0.2);
-    color:var(--accent);
-    letter-spacing:1px;
-  }
-
-  .canvas-area {
-    position:relative;
-    overflow:hidden;
-    height:230px;
-  }
-
-  canvas {
-    display:block;
-    width:100%;
-    height:100%;
-  }
-
-  .live-badge {
-    position:absolute;
-    top:8px;
-    right:8px;
-    background:rgba(0,255,179,0.07);
-    border:1px solid rgba(0,255,179,0.28);
-    border-radius:4px;
-    padding:3px 10px;
-    font-family:'Share Tech Mono',monospace;
-    font-size:12px;
-    color:var(--accent2);
-    text-shadow:0 0 8px var(--accent2);
-    display:flex;
-    align-items:center;
-    gap:6px;
-  }
-
-  .live-badge::before {
-    content:'';
-    width:6px;
-    height:6px;
-    border-radius:50%;
-    background:var(--accent2);
-    box-shadow:0 0 6px var(--accent2);
-    animation:pulse 1s ease-in-out infinite;
-  }
-
-  .canvas-area::after {
-    content:'';
-    position:absolute;
-    inset:0;
-    background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.06) 2px,rgba(0,0,0,0.06) 4px);
-    pointer-events:none;
-  }
-
-  .axis-x, .axis-y {
-    position:absolute;
-    font-family:'Share Tech Mono',monospace;
-    font-size:9px;
-    color:var(--text-dim);
-  }
-
-  .axis-x { bottom:6px; right:10px; }
-  .axis-y { top:8px; left:8px; writing-mode:vertical-rl; transform:rotate(180deg); }
-
-  .footer-strip {
-    margin-top:14px;
-    display:flex;
-    align-items:center;
-    gap:20px;
-    background:var(--panel);
-    border:1px solid var(--panel-border);
-    border-radius:8px;
-    padding:8px 18px;
-    flex-wrap:wrap;
-  }
-
-  .mqtt-topic {
-    font-family:'Share Tech Mono',monospace;
-    font-size:9px;
-    color:var(--text-dim);
-    letter-spacing:1px;
-    line-height:2;
-  }
-
-  .mqtt-topic span { color:var(--accent3); }
-
-  .sample-count {
-    margin-left:auto;
-    font-family:'Share Tech Mono',monospace;
-    font-size:9px;
-    color:var(--text-dim);
-    text-align:right;
-  }
-
-  .sample-count b {
-    color:var(--accent);
-    font-size:16px;
-    display:block;
-  }
-
-  @media (max-width:900px) {
-    .wrapper { padding:12px 14px 18px; }
-    .top-bar { flex-direction:column; align-items:stretch; gap:10px; }
-    .selector-bar, .input-selector-bar { width:100%; justify-content:space-between; }
-    .ctrl-btn, .input-btn { flex:1; padding:8px 6px; font-size:11px; letter-spacing:1px; text-align:center; }
-    .setpoint-card { flex-wrap:wrap; gap:8px; }
-    .gauge-wrap { flex-direction:row; align-items:center; gap:10px; width:100%; }
-    .gauge-bar-outer { flex:1; width:auto; }
-    .canvas-area { height:200px !important; }
-  }
-
-  @media (max-width:540px) {
-    .wrapper { padding:10px 10px 16px; }
-    header { gap:8px; flex-wrap:wrap; }
-    .crane-icon { display:none; }
-    .brand-name { font-size:16px; letter-spacing:1px; }
-    .brand-sub { display:none; }
-    .conn-pill { font-size:10px; padding:4px 10px; }
-    .selector-bar, .input-selector-bar { display:grid; grid-template-columns:1fr 1fr; width:100%; }
-    .ctrl-btn, .input-btn { padding:10px 4px; font-size:11px; letter-spacing:0.5px; }
-    .setpoint-card { flex-direction:column; align-items:flex-start; gap:10px; padding:12px; }
-    .send-btn { width:100%; padding:14px; font-size:15px; letter-spacing:3px; border-radius:8px; }
-    .gauge-wrap { flex-direction:row; width:100%; align-items:center; gap:10px; padding:10px 14px; }
-    .gauge-bar-outer { flex:1; width:auto; height:12px; }
-    .plots-grid { grid-template-columns:1fr; }
-    .canvas-area { height:180px !important; }
-    .footer-strip { flex-direction:column; align-items:flex-start; gap:6px; padding:10px 14px; }
-    .sample-count { margin-left:0; }
-  }
-</style>
-</head>
-<body>
-<div class="wrapper">
-
-  <header>
-    <div class="crane-icon"></div>
-    <div class="brand">
-      <div class="brand-name">Crane<span>Axis</span></div>
-      <div class="brand-sub">SISTEMA DE CONTROL — GRÚA PLUMA · ESP32 + MQTT</div>
-    </div>
-    <div class="conn-pill connecting" id="connPill">
-      <div class="conn-dot"></div>
-      <span id="connText">Conectando...</span>
-    </div>
-  </header>
-
-  <div class="top-bar">
-
-    <div class="selector-col">
-      <div class="bar-label">// Modo de control</div>
-      <div class="selector-bar">
-        <button class="ctrl-btn active" onclick="selectCtrl(this,'PID')">PID</button>
-        <button class="ctrl-btn" onclick="selectCtrl(this,'LGR')">LGR</button>
-        <button class="ctrl-btn" onclick="selectCtrl(this,'OSC')">Osc. Muertas</button>
-        <button class="ctrl-btn" onclick="selectCtrl(this,'SERVO')">Servo</button>
-      </div>
-    </div>
-
-    <div class="selector-col">
-      <div class="bar-label">// Tipo de entrada</div>
-      <div class="input-selector-bar">
-        <button class="input-btn active" id="btnStep"   onclick="selectInput('STEP')">Step<span class="input-key-hint">[F/B]</span></button>
-        <button class="input-btn"        id="btnSquare" onclick="selectInput('SQUARE')">Cuadrada<span class="input-key-hint">[Q]</span></button>
-        <button class="input-btn"        id="btnRamp"   onclick="selectInput('RAMP')">Rampa<span class="input-key-hint">[R]</span></button>
-        <button class="input-btn"        id="btnSine"   onclick="selectInput('SINE')">Seno<span class="input-key-hint">[S]</span></button>
-        <button class="input-btn home-btn" id="btnHome" onclick="selectInput('HOME')">⌂ Home<span class="input-key-hint">[H]</span></button>
-      </div>
-    </div>
-
-    <div class="setpoint-card" id="spCard">
-      <label for="spSlider">Posición objetivo</label>
-
-      <div style="display:flex; flex-direction:column; gap:8px; min-width:220px; width:260px;">
-        <input id="spSlider" type="range" min="0" max="10" step="1" value="0">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <span class="range-hint">0 – 10</span>
-          <span id="spValue"
-                style="font-family:'Share Tech Mono',monospace; font-size:18px; color:var(--accent);">
-            0
-          </span>
-        </div>
-      </div>
-
-      <button id="sendBtn" class="send-btn" disabled onclick="publishSetpoint()">▶ Enviar</button>
-      <span class="last-sent" id="lastSent">Último: --</span>
-    </div>
-
-    <div class="input-status-pill" id="inputStatusPill" style="display:none;">
-      <div class="ips-dot"></div>
-      <span id="inputStatusText">--</span>
-    </div>
-
-    <div class="gauge-wrap">
-      <div class="gauge-label">Posición actual</div>
-      <div class="gauge-bar-outer"><div class="gauge-bar-inner" id="gaugeFill"></div></div>
-      <div class="gauge-val" id="gaugeVal">--</div>
-    </div>
-
-  </div>
-
-  <div class="plots-grid">
-
-    <div class="plot-panel">
-      <div class="panel-header">
-        <div class="panel-title">Referencia &amp; Posición x(t)</div>
-        <div class="panel-tag" id="tag-main">LIVE</div>
-      </div>
-      <div class="canvas-area">
-        <canvas id="canvas-pos"></canvas>
-        <div class="live-badge" id="live-pos">--</div>
-        <div class="axis-x">t (s) →</div>
-        <div class="axis-y">x / ref ↑</div>
-      </div>
-    </div>
-
-    <div class="plot-panel">
-      <div class="panel-header">
-        <div class="panel-title">Error Posición e_x(t) &amp; Ángulo e_θ(t)</div>
-        <div class="panel-tag">ERR</div>
-      </div>
-      <div class="canvas-area">
-        <canvas id="canvas-err"></canvas>
-        <div class="live-badge" id="live-err">--</div>
-        <div class="axis-x">t (s) →</div>
-        <div class="axis-y">error ↑</div>
-      </div>
-    </div>
-
-    <div class="plot-panel">
-      <div class="panel-header">
-        <div class="panel-title">Señal de Control Posición u_x(t)</div>
-        <div class="panel-tag">CMD-X</div>
-      </div>
-      <div class="canvas-area">
-        <canvas id="canvas-ux"></canvas>
-        <div class="live-badge" id="live-ux">-- u</div>
-        <div class="axis-x">t (s) →</div>
-        <div class="axis-y">u_x ↑</div>
-      </div>
-    </div>
-
-    <div class="plot-panel">
-      <div class="panel-header">
-        <div class="panel-title">Señal de Control Ángulo u_θ(t)</div>
-        <div class="panel-tag">CMD-θ</div>
-      </div>
-      <div class="canvas-area">
-        <canvas id="canvas-uth"></canvas>
-        <div class="live-badge" id="live-uth">-- u</div>
-        <div class="axis-x">t (s) →</div>
-        <div class="axis-y">u_θ ↑</div>
-      </div>
-    </div>
-
-  </div>
-
-  <div class="footer-strip">
-    <div class="mqtt-topic">
-      SUB <span>pendulo/esp32/imu</span><br>
-      PUB <span>pendulo/esp32/cmd</span> · MODE <span>pendulo/esp32/mode</span>
-    </div>
-    <div class="sample-count">
-      MUESTRAS<b id="p-samples">0</b>
-    </div>
-  </div>
-
-</div>
-
-<script>
-const broker    = "wss://broker.hivemq.com:8884/mqtt";
-const topicSub  = "pendulo/esp32/imu";
-const topicPub  = "pendulo/esp32/cmd";
-const topicMode = "pendulo/esp32/mode";
-const client    = mqtt.connect(broker);
-
-const connPill   = document.getElementById("connPill");
-const connText   = document.getElementById("connText");
-const sendBtn    = document.getElementById("sendBtn");
-const spSlider   = document.getElementById("spSlider");
-const spValue    = document.getElementById("spValue");
-const lastSentEl = document.getElementById("lastSent");
-const spCard     = document.getElementById("spCard");
-const inputStatusPill = document.getElementById("inputStatusPill");
-const inputStatusText = document.getElementById("inputStatusText");
-
-let currentInputMode = "STEP";
-let currentRef = 0;
-let xActual = 0;
-
-spSlider.addEventListener("input", () => {
-  spValue.textContent = spSlider.value;
-});
-
-function setConn(state, msg) {
-  connPill.className = "conn-pill " + state;
-  connText.textContent = msg;
-  sendBtn.disabled = (state !== "connected") || currentInputMode !== "STEP";
-}
-
-client.on("connect", () => {
-  setConn("connected", "🟢 Conectado — HiveMQ");
-  client.subscribe(topicSub);
-});
-
-client.on("reconnect", () => setConn("connecting", "🟡 Reintentando..."));
-client.on("close", () => setConn("error", "🔴 Desconectado"));
-client.on("error", e => setConn("error", "🔴 " + e.message));
-
-function selectInput(mode) {
-  currentInputMode = mode;
-
-  document.getElementById("btnStep")?.classList.remove("active");
-  document.getElementById("btnSquare")?.classList.remove("active");
-  document.getElementById("btnRamp")?.classList.remove("active");
-  document.getElementById("btnSine")?.classList.remove("active");
-  document.getElementById("btnHome")?.classList.remove("active");
-
-  const btnMap = {
-    STEP: "btnStep",
-    SQUARE: "btnSquare",
-    RAMP: "btnRamp",
-    SINE: "btnSine",
-    HOME: "btnHome"
-  };
-
-  document.getElementById(btnMap[mode])?.classList.add("active");
-
-  if (mode === "STEP") {
-    spCard.style.display = "";
-    inputStatusPill.style.display = "none";
-    sendBtn.disabled = !client.connected;
-  } else {
-    spCard.style.display = "none";
-    inputStatusPill.style.display = "";
-
-    const cfg = {
-      SQUARE: { cls:"active-square", txt:"CUADRADA activa — cmd: Q" },
-      RAMP:   { cls:"active-ramp",   txt:"RAMPA activa — cmd: R" },
-      SINE:   { cls:"active-sine",   txt:"SENO activo — cmd: S" },
-      HOME:   { cls:"active-home",   txt:"HOME — retornando a 0" }
-    };
-
-    inputStatusPill.className = "input-status-pill " + (cfg[mode]?.cls || "");
-    inputStatusText.textContent = cfg[mode]?.txt || "--";
-    sendBtn.disabled = true;
-  }
-
-  const cmdMap = {
-    SQUARE: "Q",
-    RAMP: "R",
-    SINE: "S",
-    HOME: "H"
-  };
-
-  if (mode !== "STEP" && client.connected) {
-    client.publish(topicPub, cmdMap[mode], { qos:0, retain:false });
-  }
-}
-
-document.addEventListener("keydown", e => {
-  if (e.key === "q" || e.key === "Q") selectInput("SQUARE");
-  if (e.key === "r" || e.key === "R") selectInput("RAMP");
-  if (e.key === "s" || e.key === "S") selectInput("SINE");
-  if (e.key === "h" || e.key === "H") selectInput("HOME");
-  if (e.key === "f" || e.key === "F") selectInput("STEP");
-});
-
-function publishSetpoint() {
-  const targetAbs = parseFloat(spSlider.value);
-  if (isNaN(targetAbs)) return;
-
-  const target = Math.max(0, Math.min(10, targetAbs));
-  const tol = 0.05;
-  const delta = Math.abs(target - xActual);
-
-  if (delta <= tol) {
-    lastSentEl.textContent = `Último: ya está en ${target.toFixed(0)}`;
-    currentRef = target;
-    return;
-  }
-
-  let cmd = "";
-  if (target > xActual) {
-    cmd = `F${delta.toFixed(2)}`;
-  } else {
-    cmd = `B${delta.toFixed(2)}`;
-  }
-
-  client.publish(topicPub, cmd, { qos:0, retain:false });
-
-  currentRef = target;
-  lastSentEl.textContent = `Último: ${cmd}  → abs ${target.toFixed(0)}`;
-  selectInput("STEP");
-}
-
-let sampleCount = 0;
-let t0 = Date.now();
-
-client.on("message", (topic, message) => {
-  if (topic !== topicSub) return;
-
-  const parts = message.toString().split(",");
-  if (parts.length < 6) return;
-
-  const ref      = parseFloat(parts[0]);
-  const x        = parseFloat(parts[1]);
-  const ex       = parseFloat(parts[2]);
-  const errTheta = parseFloat(parts[3]);
-  const ux       = parseFloat(parts[4]);
-  const uth      = parseFloat(parts[5]);
-
-  if ([ref, x, ex, errTheta, ux, uth].some(isNaN)) return;
-
-  sampleCount++;
-
-  currentRef = ref;
-  xActual = x;
-
-  pushData(buffers.pos, x);
-  pushData(buffers.ex, ex);
-  pushData(buffers.ux, ux);
-  pushData(buffers.uth, uth);
-  pushData(buffers.errTh, errTheta);
-  pushData(buffers.ref, ref);
-
-  document.getElementById("live-pos").textContent  = `x:${x.toFixed(2)}  ref:${ref.toFixed(2)}`;
-  document.getElementById("live-err").textContent  = `ex:${ex.toFixed(2)}  eθ:${errTheta.toFixed(2)}`;
-  document.getElementById("live-ux").textContent   = ux.toFixed(3) + " u";
-  document.getElementById("live-uth").textContent  = uth.toFixed(3) + " u";
-
-  const pct = Math.max(0, Math.min(100, (x / 10) * 100));
-  document.getElementById("gaugeFill").style.width = pct + "%";
-  document.getElementById("gaugeVal").textContent  = x.toFixed(2);
-
-  document.getElementById("p-samples").textContent = sampleCount;
-});
-
-const canvasIds = ["pos","err","ux","uth"];
-const canvases  = {};
-
-function setupCanvas(id) {
-  const c = document.getElementById("canvas-" + id);
-  const p = c.parentElement;
-  c.width = p.clientWidth;
-  c.height = p.clientHeight;
-  canvases[id] = c;
-}
-
-canvasIds.forEach(setupCanvas);
-
-window.addEventListener("resize", () => {
-  canvasIds.forEach(id => {
-    const c = canvases[id];
-    const p = c.parentElement;
-    c.width = p.clientWidth;
-    c.height = p.clientHeight;
-  });
-});
-
-const MAX_PTS = 300;
-const buffers = { pos:[], ref:[], ex:[], errTh:[], ux:[], uth:[] };
-
-function pushData(buf, v) {
-  buf.push({ t:(Date.now()-t0)/1000, v });
-  if (buf.length > MAX_PTS) buf.shift();
-}
-
-function drawLine(ctx, buf, color, toY, W, glow) {
-  if (buf.length < 2) return;
-
-  ctx.shadowColor = color;
-  ctx.shadowBlur  = glow ? 10 : 0;
-  ctx.strokeStyle = glow ? color + "44" : color;
-  ctx.lineWidth   = glow ? 3 : 1.8;
-  ctx.beginPath();
-
-  buf.forEach((pt, i) => {
-    const x = (i / (buf.length - 1)) * W;
-    if (i === 0) ctx.moveTo(x, toY(pt.v));
-    else ctx.lineTo(x, toY(pt.v));
-  });
-
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-
-  if (!glow) {
-    const last = buf[buf.length - 1];
-    ctx.fillStyle = color;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 14;
-    ctx.beginPath();
-    ctx.arc(W - 2, toY(last.v), 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-  }
-}
-
-function drawRefLine(ctx, buf, color, toY, W) {
-  if (buf.length < 2) return;
-
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 1.4;
-  ctx.setLineDash([6, 5]);
-  ctx.globalAlpha = 0.75;
-  ctx.beginPath();
-
-  buf.forEach((pt, i) => {
-    const x = (i / (buf.length - 1)) * W;
-    if (i === 0) ctx.moveTo(x, toY(pt.v));
-    else ctx.lineTo(x, toY(pt.v));
-  });
-
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.globalAlpha = 1;
-}
-
-function drawPlot(canvas, bufs, colors, yMin, yMax, legendLabels, refBuf) {
-  const ctx = canvas.getContext("2d");
-  const W = canvas.width;
-  const H = canvas.height;
-
-  ctx.clearRect(0, 0, W, H);
-
-  ctx.strokeStyle = "rgba(0,212,255,0.06)";
-  ctx.lineWidth = 1;
-
-  for (let i = 0; i <= 10; i++) {
-    ctx.beginPath();
-    ctx.moveTo(i * W / 10, 0);
-    ctx.lineTo(i * W / 10, H);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(0, i * H / 10);
-    ctx.lineTo(W, i * H / 10);
-    ctx.stroke();
-  }
-
-  const range = yMax - yMin || 1;
-  const toY = v => H - ((Math.max(yMin, Math.min(yMax, v)) - yMin) / range) * H;
-
-  ctx.fillStyle = "rgba(61,104,128,0.8)";
-  ctx.font = "9px 'Share Tech Mono'";
-  const ticks = 5;
-
-  for (let i = 0; i <= ticks; i++) {
-    const v = yMin + (range / ticks) * i;
-    const y = H - (i / ticks) * H;
-    ctx.fillText(v.toFixed(1), 4, y - 2);
-    ctx.strokeStyle = "rgba(0,212,255,0.05)";
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3,6]);
-    ctx.beginPath();
-    ctx.moveTo(32, y);
-    ctx.lineTo(W, y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  if (yMin < 0 && yMax > 0) {
-    const y0 = toY(0);
-    ctx.strokeStyle = "rgba(255,255,255,0.07)";
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4,4]);
-    ctx.beginPath();
-    ctx.moveTo(0, y0);
-    ctx.lineTo(W, y0);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  if (refBuf && refBuf.length >= 2) {
-    drawRefLine(ctx, refBuf, "#ffffff", toY, W);
-  }
-
-  bufs.forEach((buf, idx) => {
-    drawLine(ctx, buf, colors[idx], toY, W, true);
-    drawLine(ctx, buf, colors[idx], toY, W, false);
-  });
-
-  if (legendLabels && legendLabels.length > 0) {
-    const allLabels = refBuf ? ["ref", ...legendLabels] : legendLabels;
-    const allColors = refBuf ? ["rgba(255,255,255,0.6)", ...colors] : colors;
-
-    allLabels.forEach((lbl, idx) => {
-      const lx = 36 + idx * 60;
-      ctx.fillStyle = allColors[idx];
-      ctx.shadowColor = allColors[idx];
-      ctx.shadowBlur = 8;
-      ctx.beginPath();
-      ctx.arc(lx, 13, 4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = "rgba(180,220,240,0.75)";
-      ctx.font = "9px 'Share Tech Mono'";
-      ctx.fillText(lbl, lx + 8, 17);
-    });
-  }
-}
-
-function renderAll() {
-  drawPlot(canvases.pos, [buffers.pos], ["#00d4ff"], 0, 10, ["x"], buffers.ref);
-  drawPlot(canvases.err, [buffers.ex, buffers.errTh], ["#00ffb3","#ffaa00"], -10, 10, ["e_x","e_θ"], null);
-  drawPlot(canvases.ux,  [buffers.ux],  ["#ff6b8a"], -20, 20, ["u_x"], null);
-  drawPlot(canvases.uth, [buffers.uth], ["#c470ff"], -20, 20, ["u_θ"], null);
-  requestAnimationFrame(renderAll);
-}
-
-requestAnimationFrame(renderAll);
-
-function selectCtrl(btn, m) {
-  document.querySelectorAll(".ctrl-btn").forEach(b => b.classList.remove("active"));
-  btn.classList.add("active");
-  document.getElementById("tag-main").textContent = m;
-  if (client.connected) {
-    client.publish(topicMode, m, { qos:0, retain:true });
-  }
-}
-</script>
-</body>
-</html>
+# Sistema de Control PID - Planta de Dos Tanques
+# Interfaz de usuario para monitoreo y control via ESP32
+
+import sys
+import serial
+import serial.tools.list_ports
+import numpy as np
+import threading
+import time
+from collections import deque
+from datetime import datetime
+
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QGridLayout, QPushButton, QSlider, QLabel, QComboBox, QGroupBox,
+    QFrame, QSplitter, QStatusBar, QSizePolicy, QLCDNumber,
+    QButtonGroup, QRadioButton
+)
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QThread, QPoint
+from PyQt5.QtGui import (
+    QFont, QColor, QPalette, QPainter, QBrush, QPen,
+    QLinearGradient, QPolygon
+)
+
+import matplotlib
+matplotlib.use('Qt5Agg')
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from matplotlib.animation import FuncAnimation
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  CONSTANTES Y CONFIGURACION
+# ─────────────────────────────────────────────────────────────────────────────
+MAX_POINTS      = 300       # Puntos maximos en cada grafica
+UPDATE_INTERVAL = 100       # ms entre actualizaciones de UI
+BAUD_RATE       = 115200
+TANK_MIN_CM     = 1.0
+TANK_MAX_CM     = 8.0
+
+DARK_BG         = "#0D1117"
+PANEL_BG        = "#161B22"
+BORDER_COLOR    = "#30363D"
+ACCENT_BLUE     = "#58A6FF"
+ACCENT_GREEN    = "#3FB950"
+ACCENT_RED      = "#F85149"
+ACCENT_ORANGE   = "#D29922"
+ACCENT_PURPLE   = "#BC8CFF"
+TEXT_PRIMARY    = "#E6EDF3"
+TEXT_SECONDARY  = "#8B949E"
+BTN_ACTIVE      = "#238636"
+BTN_INACTIVE    = "#21262D"
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  HILO DE COMUNICACION SERIAL
+# ─────────────────────────────────────────────────────────────────────────────
+class SerialWorker(QObject):
+    data_received = pyqtSignal(dict)
+    status_changed = pyqtSignal(str, str)   # mensaje, color
+
+    def __init__(self):
+        super().__init__()
+        self.serial_port = None
+        self.running = False
+        self.connected = False
+        self._lock = threading.Lock()
+
+    def connect(self, port, baud=BAUD_RATE):
+        try:
+            self.serial_port = serial.Serial(port, baud, timeout=0.1)
+            self.connected = True
+            self.running = True
+            self.status_changed.emit(f"Conectado a {port} @ {baud} baud", ACCENT_GREEN)
+            thread = threading.Thread(target=self._read_loop, daemon=True)
+            thread.start()
+            return True
+        except Exception as e:
+            self.status_changed.emit(f"Error al conectar: {e}", ACCENT_RED)
+            return False
+
+    def disconnect(self):
+        self.running = False
+        self.connected = False
+        if self.serial_port and self.serial_port.is_open:
+            self.serial_port.close()
+        self.status_changed.emit("Desconectado", ACCENT_ORANGE)
+
+    def send_command(self, cmd: str):
+        if self.connected and self.serial_port and self.serial_port.is_open:
+            try:
+                with self._lock:
+                    self.serial_port.write((cmd + "\n").encode())
+            except Exception as e:
+                self.status_changed.emit(f"Error al enviar: {e}", ACCENT_RED)
+
+    def _read_loop(self):
+        """
+        Protocolo esperado desde ESP32 (CSV por linea):
+        rk,yk,ek,uk,h1,h2
+        Ejemplo: 5.00,4.82,0.18,127.50,4.82,3.10
+        """
+        buffer = ""
+        while self.running:
+            try:
+                if self.serial_port.in_waiting > 0:
+                    raw = self.serial_port.read(self.serial_port.in_waiting)
+                    buffer += raw.decode('utf-8', errors='ignore')
+                    lines = buffer.split('\n')
+                    buffer = lines[-1]
+                    for line in lines[:-1]:
+                        line = line.strip()
+                        if line:
+                            parsed = self._parse_line(line)
+                            if parsed:
+                                self.data_received.emit(parsed)
+                else:
+                    time.sleep(0.01)
+            except Exception:
+                time.sleep(0.05)
+
+    def _parse_line(self, line: str):
+        try:
+            parts = [float(x) for x in line.split(',')]
+            if len(parts) >= 6:
+                return {
+                    'rk': parts[0], 'yk': parts[1],
+                    'ek': parts[2], 'uk': parts[3],
+                    'h1': parts[4], 'h2': parts[5],
+                    'ts': time.time()
+                }
+        except Exception:
+            pass
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  SIMULADOR (para pruebas sin hardware)
+# ─────────────────────────────────────────────────────────────────────────────
+class PlantSimulator(QObject):
+    data_ready = pyqtSignal(dict)
+
+    def __init__(self):
+        super().__init__()
+        self.running = False
+        self.rk = 4.0
+        self.yk = 0.0
+        self.t  = 0.0
+        self.signal_type = "square"
+        self.period = 20.0
+
+    def start(self):
+        self.running = True
+        thread = threading.Thread(target=self._sim_loop, daemon=True)
+        thread.start()
+
+    def stop(self):
+        self.running = False
+
+    def set_setpoint(self, val):
+        self.rk = val
+
+    def set_signal(self, sig):
+        self.signal_type = sig
+
+    def _sim_loop(self):
+        dt   = 0.1
+        tau  = 3.0
+        Kp   = 0.8
+        ek_prev = 0.0
+        uk   = 0.0
+        while self.running:
+            self.t += dt
+            rk_now = self._compute_reference(self.t)
+            ek = rk_now - self.yk
+            # Controlador P simple para simulacion
+            uk = Kp * ek
+            uk = max(0, min(255, uk * 30))
+            # Planta de primer orden
+            self.yk += dt * ((-self.yk + uk / 30.0) / tau)
+            self.yk = max(0, min(8.0, self.yk))
+            self.data_ready.emit({
+                'rk': round(rk_now, 3),
+                'yk': round(self.yk, 3),
+                'ek': round(ek, 3),
+                'uk': round(uk, 3),
+                'h1': round(self.yk, 3),
+                'h2': round(self.yk * 0.6, 3),
+                'ts': time.time()
+            })
+            time.sleep(dt)
+
+    def _compute_reference(self, t):
+        base = self.rk
+        if self.signal_type == "square":
+            cycle = (t % self.period) / self.period
+            offset = 1.5 if cycle < 0.5 else -1.5
+        elif self.signal_type == "ramp":
+            offset = ((t % self.period) / self.period) * 3.0 - 1.5
+        else:  # sinusoidal
+            offset = 1.5 * np.sin(2 * np.pi * t / self.period)
+        return max(TANK_MIN_CM, min(TANK_MAX_CM, base + offset))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  WIDGET: DIAGRAMA DE LA PLANTA
+# ─────────────────────────────────────────────────────────────────────────────
+class PlantDiagramWidget(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.h1 = 0.0   # Altura tanque 1 (0-8 cm)
+        self.h2 = 0.0   # Altura tanque 2
+        self.setMinimumSize(340, 260)
+        self.setMaximumSize(400, 300)
+
+    def update_levels(self, h1, h2):
+        self.h1 = max(0, min(8.0, h1))
+        self.h2 = max(0, min(8.0, h2))
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+
+        W, H = self.width(), self.height()
+        bg = QColor(DARK_BG)
+        p.fillRect(0, 0, W, H, bg)
+
+        # Colores
+        col_tank    = QColor(48, 54, 61)
+        col_water   = QColor(31, 111, 235, 200)
+        col_pipe    = QColor(88, 166, 255)
+        col_pump    = QColor(63, 185, 80, 220)
+        col_text    = QColor(TEXT_PRIMARY)
+        col_sensor  = QColor(188, 140, 255)
+        col_valve   = QColor(209, 153, 34)
+        col_repo    = QColor(22, 27, 34)
+
+        pen_border = QPen(QColor(BORDER_COLOR), 1.5)
+        pen_pipe   = QPen(col_pipe, 2)
+        pen_text   = QPen(col_text)
+
+        # --- Repositorio (inferior) ---
+        repo_x, repo_y = int(W * 0.35), int(H * 0.75)
+        repo_w, repo_h = int(W * 0.30), int(H * 0.18)
+        p.setPen(pen_border)
+        p.setBrush(QBrush(col_repo))
+        p.drawRect(repo_x, repo_y, repo_w, repo_h)
+        # Agua en repositorio
+        p.setBrush(QBrush(QColor(31, 111, 235, 120)))
+        p.drawRect(repo_x + 2, repo_y + repo_h // 2, repo_w - 4, repo_h // 2 - 2)
+
+        p.setPen(pen_text)
+        f = QFont("Consolas", 7)
+        p.setFont(f)
+        p.drawText(repo_x, repo_y + repo_h + 14, "Repositorio")
+
+        # Bomba
+        pump_cx = repo_x - int(W * 0.12)
+        pump_cy = repo_y + repo_h // 2
+        p.setPen(QPen(col_pump, 2))
+        p.setBrush(QBrush(QColor(20, 50, 20)))
+        p.drawEllipse(pump_cx - 12, pump_cy - 12, 24, 24)
+        p.setPen(pen_text)
+        p.drawText(pump_cx - 10, pump_cy + 4, "B")
+
+        # --- Tanque 1 ---
+        t1_x, t1_y = int(W * 0.05), int(H * 0.12)
+        t1_w, t1_h = int(W * 0.28), int(H * 0.52)
+
+        fill1 = int(t1_h * (self.h1 / 8.0))
+        p.setPen(pen_border)
+        p.setBrush(QBrush(col_tank))
+        p.drawRect(t1_x, t1_y, t1_w, t1_h)
+
+        # Agua tanque 1
+        if fill1 > 0:
+            grad1 = QLinearGradient(t1_x, t1_y + t1_h - fill1, t1_x, t1_y + t1_h)
+            grad1.setColorAt(0, QColor(58, 150, 255, 200))
+            grad1.setColorAt(1, QColor(20, 90, 200, 220))
+            p.setBrush(QBrush(grad1))
+            p.setPen(Qt.NoPen)
+            p.drawRect(t1_x + 2, t1_y + t1_h - fill1, t1_w - 4, fill1 - 1)
+
+        p.setPen(pen_text)
+        p.drawText(t1_x + 4, t1_y - 5, f"T1: {self.h1:.2f} cm")
+
+        # Sensor ultrasonico T1
+        p.setPen(QPen(col_sensor, 1))
+        p.drawLine(t1_x + t1_w // 2 - 8, t1_y + 6, t1_x + t1_w // 2 + 8, t1_y + 6)
+        p.drawLine(t1_x + t1_w // 2, t1_y + 6, t1_x + t1_w // 2, t1_y + 14)
+
+        # --- Tanque 2 ---
+        t2_x, t2_y = int(W * 0.62), int(H * 0.12)
+        t2_w, t2_h = int(W * 0.28), int(H * 0.52)
+
+        fill2 = int(t2_h * (self.h2 / 8.0))
+        p.setPen(pen_border)
+        p.setBrush(QBrush(col_tank))
+        p.drawRect(t2_x, t2_y, t2_w, t2_h)
+
+        if fill2 > 0:
+            grad2 = QLinearGradient(t2_x, t2_y + t2_h - fill2, t2_x, t2_y + t2_h)
+            grad2.setColorAt(0, QColor(58, 150, 255, 200))
+            grad2.setColorAt(1, QColor(20, 90, 200, 220))
+            p.setBrush(QBrush(grad2))
+            p.setPen(Qt.NoPen)
+            p.drawRect(t2_x + 2, t2_y + t2_h - fill2, t2_w - 4, fill2 - 1)
+
+        p.setPen(pen_text)
+        p.drawText(t2_x + 4, t2_y - 5, f"T2: {self.h2:.2f} cm")
+
+        # Sensor ultrasonico T2
+        p.setPen(QPen(col_sensor, 1))
+        p.drawLine(t2_x + t2_w // 2 - 8, t2_y + 6, t2_x + t2_w // 2 + 8, t2_y + 6)
+        p.drawLine(t2_x + t2_w // 2, t2_y + 6, t2_x + t2_w // 2, t2_y + 14)
+
+        # --- Tuberias / conexiones ---
+        p.setPen(pen_pipe)
+        mid_y = t1_y + t1_h
+
+        # Conexion inferior entre tanques (T1 -> T2)
+        conn_y = t1_y + t1_h - 8
+        p.drawLine(t1_x + t1_w, conn_y, t2_x, conn_y)
+        
+        # Valvula intermedia - CORRECCIÓN AQUI ✅
+        valve_x = (t1_x + t1_w + t2_x) // 2
+        pts = QPolygon([
+            QPoint(valve_x, conn_y - 6),
+            QPoint(valve_x + 6, conn_y),
+            QPoint(valve_x, conn_y + 6),
+            QPoint(valve_x - 6, conn_y),
+        ])
+        p.setBrush(QBrush(col_valve))
+        p.setPen(QPen(col_valve, 1))
+        p.drawPolygon(pts)
+
+        # Salida T2 -> repositorio
+        p.setPen(pen_pipe)
+        p.drawLine(t2_x + t2_w // 2, t2_y + t2_h, t2_x + t2_w // 2, repo_y)
+        # Valvula salida T2
+        v2_y = t2_y + t2_h + (repo_y - t2_y - t2_h) // 2
+        pts2 = QPolygon([
+            QPoint(t2_x + t2_w // 2, v2_y - 6),
+            QPoint(t2_x + t2_w // 2 + 6, v2_y),
+            QPoint(t2_x + t2_w // 2, v2_y + 6),
+            QPoint(t2_x + t2_w // 2 - 6, v2_y),
+        ])
+        p.setBrush(QBrush(col_valve))
+        p.drawPolygon(pts2)
+
+        # Repo -> bomba -> T1 (entrada superior)
+        p.setPen(pen_pipe)
+        p.drawLine(repo_x, repo_y + repo_h // 2, pump_cx + 12, pump_cy)
+        p.drawLine(pump_cx - 12, pump_cy, pump_cx - 12, t1_y + 4)
+        p.drawLine(pump_cx - 12, t1_y + 4, t1_x + t1_w // 2, t1_y + 4)
+
+        # Salida T2 a repo
+        p.drawLine(t2_x + t2_w // 2, repo_y, repo_x + repo_w // 2, repo_y)
+        p.drawLine(repo_x + repo_w // 2, repo_y, repo_x + repo_w // 2, repo_y)
+
+        p.end()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  WIDGET: GRAFICA MATPLOTLIB (tiempo real)
+# ─────────────────────────────────────────────────────────────────────────────
+class RealtimeChart(FigureCanvas):
+    def __init__(self, title, ylabel, color1, color2=None,
+                 label1="", label2="", parent=None):
+        self.fig = Figure(figsize=(5, 1.8), facecolor=DARK_BG)
+        super().__init__(self.fig)
+        self.setParent(parent)
+
+        self.ax = self.fig.add_subplot(111)
+        self._style_axes()
+
+        self.title  = title
+        self.color1 = color1
+        self.color2 = color2
+        self.label1 = label1
+        self.label2 = label2
+
+        self.data1 = deque(maxlen=MAX_POINTS)
+        self.data2 = deque(maxlen=MAX_POINTS) if color2 else None
+        self.times = deque(maxlen=MAX_POINTS)
+
+        self.line1, = self.ax.plot([], [], color=color1,
+                                   linewidth=1.6, label=label1)
+        if color2:
+            self.line2, = self.ax.plot([], [], color=color2,
+                                       linewidth=1.6, linestyle='--', label=label2)
+
+        self.ax.set_title(title, color=TEXT_PRIMARY,
+                          fontsize=9, fontweight='bold', pad=4)
+        self.ax.set_ylabel(ylabel, color=TEXT_SECONDARY, fontsize=8)
+        if label1:
+            self.ax.legend(facecolor=PANEL_BG, edgecolor=BORDER_COLOR,
+                           labelcolor=TEXT_PRIMARY, fontsize=7, loc='upper right')
+        self.fig.tight_layout(pad=0.5)
+        self.setMinimumHeight(160)
+
+    def _style_axes(self):
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_facecolor("#0D1117")
+        self.ax.tick_params(colors=TEXT_SECONDARY, labelsize=7)
+        self.ax.spines['bottom'].set_color(BORDER_COLOR)
+        self.ax.spines['top'].set_color(BORDER_COLOR)
+        self.ax.spines['left'].set_color(BORDER_COLOR)
+        self.ax.spines['right'].set_color(BORDER_COLOR)
+        self.ax.grid(True, alpha=0.15, color=BORDER_COLOR, linestyle='-')
+
+    def push(self, val1, val2=None):
+        now = time.time()
+        self.data1.append(val1)
+        self.times.append(now)
+        if self.data2 is not None and val2 is not None:
+            self.data2.append(val2)
+
+    def refresh(self):
+        if not self.times:
+            return
+        t0 = self.times[0]
+        xs = [t - t0 for t in self.times]
+        ys1 = list(self.data1)
+        self.line1.set_data(xs, ys1)
+        if self.data2 is not None:
+            ys2 = list(self.data2)
+            self.line2.set_data(xs, ys2)
+            all_y = ys1 + ys2
+        else:
+            all_y = ys1
+
+        if len(xs) > 1:
+            self.ax.set_xlim(xs[0], xs[-1])
+        if all_y:
+            mn, mx = min(all_y), max(all_y)
+            margin = max(0.5, (mx - mn) * 0.15)
+            self.ax.set_ylim(mn - margin, mx + margin)
+        self.draw_idle()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  VENTANA PRINCIPAL
+# ─────────────────────────────────────────────────────────────────────────────
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Control PID - Planta de Dos Tanques | ESP32")
+        self.setMinimumSize(1280, 820)
+        self.resize(1400, 900)
+        self._apply_global_style()
+
+        # Estado interno
+        self.pid_mode     = "PIDcd"      # PIDcd | PIDdd
+        self.signal_type  = "square"     # square | ramp | sine
+        self.setpoint     = 4.0
+        self.is_connected = False
+        self.sim_mode     = False
+
+        # Datos
+        self.serial_worker = SerialWorker()
+        self.simulator     = PlantSimulator()
+
+        self._build_ui()
+        self._connect_signals()
+
+        # Timer de refresco de graficas
+        self.refresh_timer = QTimer()
+        self.refresh_timer.timeout.connect(self._refresh_charts)
+        self.refresh_timer.start(UPDATE_INTERVAL)
+
+        # Escanear puertos al inicio
+        self._scan_ports()
+
+    # ── ESTILOS ───────────────────────────────────────────────────────────────
+    def _apply_global_style(self):
+        self.setStyleSheet(f"""
+        QMainWindow, QWidget {{
+            background-color: {DARK_BG};
+            color: {TEXT_PRIMARY};
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 12px;
+        }}
+        QGroupBox {{
+            border: 1px solid {BORDER_COLOR};
+            border-radius: 6px;
+            margin-top: 10px;
+            padding-top: 10px;
+            font-size: 11px;
+            font-weight: bold;
+            color: {TEXT_SECONDARY};
+        }}
+        QGroupBox::title {{
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 6px;
+            color: {ACCENT_BLUE};
+        }}
+        QPushButton {{
+            background-color: {BTN_INACTIVE};
+            color: {TEXT_PRIMARY};
+            border: 1px solid {BORDER_COLOR};
+            border-radius: 5px;
+            padding: 7px 14px;
+            font-weight: bold;
+            font-size: 11px;
+        }}
+        QPushButton:hover {{
+            background-color: #30363D;
+            border-color: {ACCENT_BLUE};
+        }}
+        QPushButton:pressed {{
+            background-color: #0D419D;
+        }}
+        QPushButton.active {{
+            background-color: {BTN_ACTIVE};
+            border-color: {ACCENT_GREEN};
+            color: #FFFFFF;
+        }}
+        QPushButton.danger {{
+            background-color: #8B0000;
+            border-color: {ACCENT_RED};
+        }}
+        QSlider::groove:horizontal {{
+            height: 6px;
+            background: {BORDER_COLOR};
+            border-radius: 3px;
+        }}
+        QSlider::handle:horizontal {{
+            background: {ACCENT_BLUE};
+            border: 2px solid {ACCENT_BLUE};
+            width: 16px;
+            height: 16px;
+            margin: -5px 0;
+            border-radius: 8px;
+        }}
+        QSlider::sub-page:horizontal {{
+            background: {ACCENT_BLUE};
+            border-radius: 3px;
+        }}
+        QComboBox {{
+            background-color: {PANEL_BG};
+            border: 1px solid {BORDER_COLOR};
+            border-radius: 4px;
+            padding: 4px 8px;
+            color: {TEXT_PRIMARY};
+        }}
+        QComboBox::drop-down {{
+            border: none;
+        }}
+        QComboBox QAbstractItemView {{
+            background-color: {PANEL_BG};
+            border: 1px solid {BORDER_COLOR};
+            selection-background-color: {ACCENT_BLUE};
+        }}
+        QLabel {{
+            color: {TEXT_PRIMARY};
+        }}
+        QStatusBar {{
+            background-color: {PANEL_BG};
+            border-top: 1px solid {BORDER_COLOR};
+            color: {TEXT_SECONDARY};
+            font-size: 11px;
+        }}
+        QLCDNumber {{
+            background-color: {PANEL_BG};
+            color: {ACCENT_GREEN};
+            border: 1px solid {BORDER_COLOR};
+            border-radius: 4px;
+        }}
+        """)
+
+    # ── CONSTRUCCION UI ───────────────────────────────────────────────────────
+    def _build_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(8)
+
+        # ────────────────────────────────
+        # COLUMNA IZQUIERDA: panel de control
+        # ────────────────────────────────
+        left_col = QVBoxLayout()
+        left_col.setSpacing(8)
+
+        # -- Titulo ---
+        title_lbl = QLabel("CONTROL PID\nPlanta de Dos Tanques")
+        title_lbl.setAlignment(Qt.AlignCenter)
+        title_lbl.setStyleSheet(f"""
+            color: {ACCENT_BLUE};
+            font-size: 15px;
+            font-weight: bold;
+            letter-spacing: 1px;
+            padding: 8px;
+            border: 1px solid {BORDER_COLOR};
+            border-radius: 6px;
+            background-color: {PANEL_BG};
+        """)
+        left_col.addWidget(title_lbl)
+
+        # -- Conexion Serial ---
+        serial_grp = QGroupBox("Conexion Serial")
+        serial_lay = QVBoxLayout(serial_grp)
+        serial_lay.setSpacing(6)
+
+        port_row = QHBoxLayout()
+        self.port_combo = QComboBox()
+        self.port_combo.setMinimumWidth(120)
+        self.btn_scan = QPushButton("Escanear")
+        self.btn_scan.setFixedWidth(80)
+        port_row.addWidget(QLabel("Puerto:"))
+        port_row.addWidget(self.port_combo, 1)
+        port_row.addWidget(self.btn_scan)
+        serial_lay.addLayout(port_row)
+
+        baud_row = QHBoxLayout()
+        self.baud_combo = QComboBox()
+        for b in ["9600", "19200", "38400", "57600", "115200", "230400"]:
+            self.baud_combo.addItem(b)
+        self.baud_combo.setCurrentText("115200")
+        baud_row.addWidget(QLabel("Baud:"))
+        baud_row.addWidget(self.baud_combo, 1)
+        serial_lay.addLayout(baud_row)
+
+        conn_row = QHBoxLayout()
+        self.btn_connect    = QPushButton("Conectar")
+        self.btn_disconnect = QPushButton("Desconectar")
+        self.btn_simulate   = QPushButton("Simular")
+        self.btn_disconnect.setEnabled(False)
+        conn_row.addWidget(self.btn_connect)
+        conn_row.addWidget(self.btn_disconnect)
+        serial_lay.addLayout(conn_row)
+        serial_lay.addWidget(self.btn_simulate)
+
+        # Estado conexion
+        self.conn_status_lbl = QLabel("Estado: Desconectado")
+        self.conn_status_lbl.setStyleSheet(f"color: {ACCENT_ORANGE}; font-size: 10px;")
+        self.conn_status_lbl.setAlignment(Qt.AlignCenter)
+        serial_lay.addWidget(self.conn_status_lbl)
+        left_col.addWidget(serial_grp)
+
+        # -- Modo de Control PID ---
+        pid_grp = QGroupBox("Modo de Control")
+        pid_lay = QVBoxLayout(pid_grp)
+        pid_lay.setSpacing(6)
+
+        self.btn_pid_cd = QPushButton("PID Continuo-Discreto")
+        self.btn_pid_dd = QPushButton("PID Discreto-Discreto")
+        self.btn_pid_cd.setProperty("class", "active")
+        self._set_btn_active(self.btn_pid_cd, True)
+        self._set_btn_active(self.btn_pid_dd, False)
+
+        pid_lay.addWidget(self.btn_pid_cd)
+        pid_lay.addWidget(self.btn_pid_dd)
+
+        pid_info = QLabel(
+            "cd: Controlador en tiempo continuo\n    discretizado por Tustin/ZOH\n"
+            "dd: Discretizacion directa en z"
+        )
+        pid_info.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 9px;")
+        pid_info.setWordWrap(True)
+        pid_lay.addWidget(pid_info)
+        left_col.addWidget(pid_grp)
+
+        # -- Tipo de Senal de Entrada ---
+        sig_grp = QGroupBox("Senal de Referencia")
+        sig_lay = QVBoxLayout(sig_grp)
+        sig_lay.setSpacing(6)
+
+        self.btn_square = QPushButton("Cuadrada")
+        self.btn_ramp   = QPushButton("Rampa")
+        self.btn_sine   = QPushButton("Senoidal")
+        self._set_btn_active(self.btn_square, True)
+        self._set_btn_active(self.btn_ramp, False)
+        self._set_btn_active(self.btn_sine, False)
+
+        sig_lay.addWidget(self.btn_square)
+        sig_lay.addWidget(self.btn_ramp)
+        sig_lay.addWidget(self.btn_sine)
+        left_col.addWidget(sig_grp)
+
+        # -- Setpoint Slider ---
+        sp_grp = QGroupBox("Setpoint de Nivel")
+        sp_lay = QVBoxLayout(sp_grp)
+        sp_lay.setSpacing(6)
+
+        self.setpoint_display = QLCDNumber(5)
+        self.setpoint_display.setDigitCount(5)
+        self.setpoint_display.setFixedHeight(48)
+        self.setpoint_display.display(f"{self.setpoint:.2f}")
+        sp_lay.addWidget(self.setpoint_display)
+
+        sp_unit_lbl = QLabel("Altura deseada (cm)")
+        sp_unit_lbl.setAlignment(Qt.AlignCenter)
+        sp_unit_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
+        sp_lay.addWidget(sp_unit_lbl)
+
+        slider_row = QHBoxLayout()
+        self.sp_slider = QSlider(Qt.Horizontal)
+        self.sp_slider.setMinimum(10)
+        self.sp_slider.setMaximum(80)
+        self.sp_slider.setValue(int(self.setpoint * 10))
+        self.sp_slider.setTickInterval(10)
+        self.sp_slider.setTickPosition(QSlider.TicksBelow)
+
+        lbl_min = QLabel("1 cm")
+        lbl_max = QLabel("8 cm")
+        lbl_min.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 9px;")
+        lbl_max.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 9px;")
+        slider_row.addWidget(lbl_min)
+        slider_row.addWidget(self.sp_slider, 1)
+        slider_row.addWidget(lbl_max)
+        sp_lay.addLayout(slider_row)
+
+        self.btn_send_sp = QPushButton("Enviar Setpoint a ESP32")
+        self.btn_send_sp.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #0D419D;
+                border-color: {ACCENT_BLUE};
+                color: white;
+            }}
+            QPushButton:hover {{
+                background-color: #1158C7;
+            }}
+        """)
+        sp_lay.addWidget(self.btn_send_sp)
+        left_col.addWidget(sp_grp)
+
+        # -- Mediciones en Vivo ---
+        live_grp = QGroupBox("Mediciones en Vivo")
+        live_grid = QGridLayout(live_grp)
+        live_grid.setSpacing(4)
+
+        labels = [
+            ("rk (Ref):", ACCENT_BLUE),
+            ("yk (Salida):", ACCENT_GREEN),
+            ("ek (Error):", ACCENT_RED),
+            ("uk (Control):", ACCENT_ORANGE),
+            ("H1 (Tanque 1):", ACCENT_PURPLE),
+            ("H2 (Tanque 2):", "#79C0FF"),
+        ]
+        self.live_labels = {}
+        for i, (lbl_txt, color) in enumerate(labels):
+            name_lbl = QLabel(lbl_txt)
+            name_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
+            val_lbl = QLabel("---")
+            val_lbl.setStyleSheet(
+                f"color: {color}; font-weight: bold; font-size: 12px;"
+                f"font-family: 'Consolas'; min-width: 60px;"
+            )
+            val_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            live_grid.addWidget(name_lbl, i, 0)
+            live_grid.addWidget(val_lbl, i, 1)
+            self.live_labels[lbl_txt] = val_lbl
+        left_col.addWidget(live_grp)
+
+        # -- Botones de Control ---
+        ctrl_grp = QGroupBox("Control de Planta")
+        ctrl_lay = QVBoxLayout(ctrl_grp)
+        self.btn_start = QPushButton("Iniciar Control")
+        self.btn_stop  = QPushButton("Detener Control")
+        self.btn_reset = QPushButton("Reset Graficas")
+        self.btn_start.setStyleSheet(f"background-color: {BTN_ACTIVE}; color: white; font-weight: bold;")
+        self.btn_stop.setStyleSheet(f"background-color: #8B0000; color: white; font-weight: bold;")
+        ctrl_lay.addWidget(self.btn_start)
+        ctrl_lay.addWidget(self.btn_stop)
+        ctrl_lay.addWidget(self.btn_reset)
+        left_col.addWidget(ctrl_grp)
+
+        left_col.addStretch()
+
+        # ────────────────────────────────
+        # COLUMNA DERECHA: graficas + diagrama
+        # ────────────────────────────────
+        right_col = QVBoxLayout()
+        right_col.setSpacing(8)
+
+        # -- Diagrama de la planta ---
+        diagram_grp = QGroupBox("Diagrama de la Planta (Tiempo Real)")
+        diagram_lay = QHBoxLayout(diagram_grp)
+        self.plant_diagram = PlantDiagramWidget()
+        diagram_lay.addWidget(self.plant_diagram)
+
+        # Info lateral del diagrama
+        info_col = QVBoxLayout()
+        info_col.setSpacing(4)
+        for lbl_txt, color in [
+            ("Sensor Ultrasonico", ACCENT_PURPLE),
+            ("Valvula Inter-tanque", ACCENT_ORANGE),
+            ("Valvula Salida T2", ACCENT_ORANGE),
+            ("Bomba de Agua", ACCENT_GREEN),
+            ("Tuberia / Flujo", ACCENT_BLUE),
+        ]:
+            l = QLabel(f"-- {lbl_txt}")
+            l.setStyleSheet(f"color: {color}; font-size: 9px;")
+            info_col.addWidget(l)
+        info_col.addStretch()
+        diagram_lay.addLayout(info_col)
+        right_col.addWidget(diagram_grp)
+
+        # -- Graficas ---
+        charts_grp = QGroupBox("Senales de Control (Tiempo Real)")
+        charts_lay = QVBoxLayout(charts_grp)
+        charts_lay.setSpacing(4)
+
+        self.chart_rk_yk = RealtimeChart(
+            "rk / yk  -  Referencia y Salida del Sistema",
+            "Nivel (cm)", ACCENT_BLUE, ACCENT_GREEN,
+            "rk (ref)", "yk (salida)"
+        )
+        self.chart_ek = RealtimeChart(
+            "ek  -  Error de Control",
+            "Error (cm)", ACCENT_RED, label1="ek"
+        )
+        self.chart_uk = RealtimeChart(
+            "uk  -  Senal de Control (PWM/Voltage)",
+            "uk", ACCENT_ORANGE, label1="uk"
+        )
+
+        charts_lay.addWidget(self.chart_rk_yk)
+        charts_lay.addWidget(self.chart_ek)
+        charts_lay.addWidget(self.chart_uk)
+        right_col.addWidget(charts_grp, 1)
+
+        # ────────────────────────────────
+        # Ensamblado final
+        # ────────────────────────────────
+        left_widget = QWidget()
+        left_widget.setLayout(left_col)
+        left_widget.setFixedWidth(290)
+        left_widget.setStyleSheet(f"background-color: {PANEL_BG}; border-radius: 8px;")
+
+        right_widget = QWidget()
+        right_widget.setLayout(right_col)
+
+        root.addWidget(left_widget)
+        root.addWidget(right_widget, 1)
+
+        # Status bar
+        self.status_bar = self.statusBar()
+        self.status_bar.showMessage("Sistema listo. Seleccione puerto COM y conecte la ESP32.")
+
+    # ── SEÑALES Y SLOTS ───────────────────────────────────────────────────────
+    def _connect_signals(self):
+        self.btn_scan.clicked.connect(self._scan_ports)
+        self.btn_connect.clicked.connect(self._connect_serial)
+        self.btn_disconnect.clicked.connect(self._disconnect_serial)
+        self.btn_simulate.clicked.connect(self._toggle_simulation)
+
+        self.btn_pid_cd.clicked.connect(lambda: self._set_pid_mode("PIDcd"))
+        self.btn_pid_dd.clicked.connect(lambda: self._set_pid_mode("PIDdd"))
+
+        self.btn_square.clicked.connect(lambda: self._set_signal("square"))
+        self.btn_ramp.clicked.connect(lambda: self._set_signal("ramp"))
+        self.btn_sine.clicked.connect(lambda: self._set_signal("sine"))
+
+        self.sp_slider.valueChanged.connect(self._on_slider_changed)
+        self.btn_send_sp.clicked.connect(self._send_setpoint)
+
+        self.btn_start.clicked.connect(self._start_control)
+        self.btn_stop.clicked.connect(self._stop_control)
+        self.btn_reset.clicked.connect(self._reset_charts)
+
+        self.serial_worker.data_received.connect(self._on_data_received)
+        self.serial_worker.status_changed.connect(self._on_serial_status)
+
+        self.simulator.data_ready.connect(self._on_data_received)
+
+    # ── ACCIONES ──────────────────────────────────────────────────────────────
+    def _scan_ports(self):
+        self.port_combo.clear()
+        ports = serial.tools.list_ports.comports()
+        if not ports:
+            self.port_combo.addItem("No hay puertos disponibles")
+            self.status_bar.showMessage("No se encontraron puertos COM.")
+        else:
+            for p in ports:
+                self.port_combo.addItem(f"{p.device} - {p.description}")
+            self.status_bar.showMessage(
+                f"Se encontraron {len(ports)} puerto(s) COM."
+            )
+
+    def _connect_serial(self):
+        port_txt = self.port_combo.currentText()
+        if not port_txt or "No hay" in port_txt:
+            return
+        port = port_txt.split(" - ")[0].strip()
+        baud = int(self.baud_combo.currentText())
+        ok = self.serial_worker.connect(port, baud)
+        if ok:
+            self.is_connected = True
+            self.btn_connect.setEnabled(False)
+            self.btn_disconnect.setEnabled(True)
+            self.sim_mode = False
+
+    def _disconnect_serial(self):
+        self.serial_worker.disconnect()
+        self.is_connected = False
+        self.btn_connect.setEnabled(True)
+        self.btn_disconnect.setEnabled(False)
+
+    def _toggle_simulation(self):
+        if self.sim_mode:
+            self.simulator.stop()
+            self.sim_mode = False
+            self.btn_simulate.setText("Simular")
+            self._set_btn_active_style(self.btn_simulate, False)
+            self.conn_status_lbl.setText("Estado: Desconectado")
+            self.conn_status_lbl.setStyleSheet(f"color: {ACCENT_ORANGE}; font-size: 10px;")
+        else:
+            self.simulator.set_setpoint(self.setpoint)
+            self.simulator.set_signal(self.signal_type)
+            self.simulator.start()
+            self.sim_mode = True
+            self.btn_simulate.setText("Detener Simulacion")
+            self._set_btn_active_style(self.btn_simulate, True)
+            self.conn_status_lbl.setText("Estado: Simulando")
+            self.conn_status_lbl.setStyleSheet(f"color: {ACCENT_PURPLE}; font-size: 10px;")
+
+    def _set_pid_mode(self, mode):
+        self.pid_mode = mode
+        self._set_btn_active(self.btn_pid_cd, mode == "PIDcd")
+        self._set_btn_active(self.btn_pid_dd, mode == "PIDdd")
+        cmd = f"PID:{mode}"
+        self.serial_worker.send_command(cmd)
+        self.status_bar.showMessage(f"Modo PID cambiado a: {mode}")
+
+    def _set_signal(self, sig):
+        self.signal_type = sig
+        self._set_btn_active(self.btn_square, sig == "square")
+        self._set_btn_active(self.btn_ramp,   sig == "ramp")
+        self._set_btn_active(self.btn_sine,   sig == "sine")
+        self.simulator.set_signal(sig)
+        cmd = f"SIG:{sig}"
+        self.serial_worker.send_command(cmd)
+        self.status_bar.showMessage(f"Senal de referencia: {sig}")
+
+    def _on_slider_changed(self, val):
+        self.setpoint = val / 10.0
+        self.setpoint_display.display(f"{self.setpoint:.2f}")
+        self.simulator.set_setpoint(self.setpoint)
+
+    def _send_setpoint(self):
+        cmd = f"SP:{self.setpoint:.2f}"
+        self.serial_worker.send_command(cmd)
+        self.status_bar.showMessage(
+            f"Setpoint enviado: {self.setpoint:.2f} cm  |  Comando: {cmd}"
+        )
+
+    def _start_control(self):
+        self.serial_worker.send_command("START")
+        self.status_bar.showMessage("Control iniciado.")
+
+    def _stop_control(self):
+        self.serial_worker.send_command("STOP")
+        self.status_bar.showMessage("Control detenido.")
+
+    def _reset_charts(self):
+        for chart in [self.chart_rk_yk, self.chart_ek, self.chart_uk]:
+            chart.data1.clear()
+            if chart.data2 is not None:
+                chart.data2.clear()
+            chart.times.clear()
+        self.status_bar.showMessage("Graficas reiniciadas.")
+
+    def _on_data_received(self, data: dict):
+        # Actualizar graficas
+        self.chart_rk_yk.push(data['rk'], data['yk'])
+        self.chart_ek.push(data['ek'])
+        self.chart_uk.push(data['uk'])
+
+        # Actualizar etiquetas live
+        self.live_labels["rk (Ref):"].setText(f"{data['rk']:.3f} cm")
+        self.live_labels["yk (Salida):"].setText(f"{data['yk']:.3f} cm")
+        self.live_labels["ek (Error):"].setText(f"{data['ek']:.3f} cm")
+        self.live_labels["uk (Control):"].setText(f"{data['uk']:.2f}")
+        self.live_labels["H1 (Tanque 1):"].setText(f"{data['h1']:.3f} cm")
+        self.live_labels["H2 (Tanque 2):"].setText(f"{data['h2']:.3f} cm")
+
+        # Actualizar diagrama
+        self.plant_diagram.update_levels(data['h1'], data['h2'])
+
+    def _on_serial_status(self, msg, color):
+        self.conn_status_lbl.setText(f"Estado: {msg}")
+        self.conn_status_lbl.setStyleSheet(f"color: {color}; font-size: 10px;")
+        self.status_bar.showMessage(msg)
+
+    def _refresh_charts(self):
+        self.chart_rk_yk.refresh()
+        self.chart_ek.refresh()
+        self.chart_uk.refresh()
+
+    # ── HELPERS DE ESTILO ─────────────────────────────────────────────────────
+    def _set_btn_active(self, btn, active: bool):
+        if active:
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {BTN_ACTIVE};
+                    border: 1px solid {ACCENT_GREEN};
+                    color: white;
+                    font-weight: bold;
+                    border-radius: 5px;
+                    padding: 7px 14px;
+                }}
+            """)
+        else:
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {BTN_INACTIVE};
+                    border: 1px solid {BORDER_COLOR};
+                    color: {TEXT_PRIMARY};
+                    font-weight: bold;
+                    border-radius: 5px;
+                    padding: 7px 14px;
+                }}
+                QPushButton:hover {{
+                    background-color: #30363D;
+                    border-color: {ACCENT_BLUE};
+                }}
+            """)
+
+    def _set_btn_active_style(self, btn, active: bool):
+        self._set_btn_active(btn, active)
+
+    def closeEvent(self, event):
+        self.serial_worker.disconnect()
+        self.simulator.stop()
+        event.accept()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  ENTRADA
+# ─────────────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+
+    # Paleta global oscura
+    palette = QPalette()
+    palette.setColor(QPalette.Window,          QColor(DARK_BG))
+    palette.setColor(QPalette.WindowText,      QColor(TEXT_PRIMARY))
+    palette.setColor(QPalette.Base,            QColor(PANEL_BG))
+    palette.setColor(QPalette.AlternateBase,   QColor(DARK_BG))
+    palette.setColor(QPalette.ToolTipBase,     QColor(TEXT_PRIMARY))
+    palette.setColor(QPalette.ToolTipText,     QColor(TEXT_PRIMARY))
+    palette.setColor(QPalette.Text,            QColor(TEXT_PRIMARY))
+    palette.setColor(QPalette.Button,          QColor(PANEL_BG))
+    palette.setColor(QPalette.ButtonText,      QColor(TEXT_PRIMARY))
+    palette.setColor(QPalette.Highlight,       QColor(ACCENT_BLUE))
+    palette.setColor(QPalette.HighlightedText, QColor(DARK_BG))
+    app.setPalette(palette)
+
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec_())
